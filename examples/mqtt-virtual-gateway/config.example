@@ -1,0 +1,43 @@
+[reticulum]
+  enable_transport = Yes
+  share_instance = Yes
+  instance_name = meshtastic-mqtt-gateway
+
+[logging]
+  loglevel = 4
+
+[interfaces]
+  [[Meshtastic MQTT virtual node]]
+    type = RNSMeshtasticInterface
+    enabled = Yes
+    mode = gateway
+
+    transport = mqtt
+    mesh_mode = broadcast
+    mqtt_host = mqtt.example.net
+    mqtt_port = 8883
+    mqtt_tls = Yes
+    mqtt_username = CHANGE-ME
+    mqtt_password = CHANGE-ME
+    mqtt_root = bgmesh/EU_868
+    mqtt_channel = RNS
+    virtual_node_id = !aabbcc11
+
+    # Explicit policy: 0 means only the physical downlink gateway's direct RF
+    # neighbours. Set 1-3 only when this broker permits multi-hop downlink.
+    mqtt_downlink_hops = 3
+    mqtt_qos = 1
+    tx_interval = 0
+
+    network_name = CHANGE-ME-rns-meshtastic
+    passphrase = CHANGE-ME-long-random-passphrase
+
+  [[LAN and VPN clients]]
+    type = TCPServerInterface
+    enabled = Yes
+    mode = gateway
+    listen_ip = 0.0.0.0
+    listen_port = 4242
+    network_name = CHANGE-ME-rns-tcp
+    passphrase = CHANGE-ME-another-long-random-passphrase
+

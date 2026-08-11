@@ -1,0 +1,33 @@
+[reticulum]
+  enable_transport = No
+  share_instance = No
+  instance_name = meshtastic-radio-client
+
+[logging]
+  loglevel = 4
+
+[interfaces]
+  [[Meshtastic radio client]]
+    type = RNSMeshtasticInterface
+    enabled = Yes
+    mode = full
+
+    transport = native
+    connection = tcp
+    tcp_host = 192.0.2.20
+    tcp_port = 4403
+    channel_index = 0
+    hop_limit = 3
+    tx_interval = 2.0
+
+    # Start with broadcast. For unicast, use the Node ID printed by radio-info
+    # for the NixOS gateway radio.
+    mesh_mode = broadcast
+    gateway_role = client
+    # gateway_node = !aabbcc11
+    want_ack = No
+    pki_required = No
+
+    network_name = CHANGE-ME-rns-meshtastic
+    passphrase = CHANGE-ME-long-random-passphrase
+

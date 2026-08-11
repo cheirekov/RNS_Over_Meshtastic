@@ -1,0 +1,43 @@
+[reticulum]
+  enable_transport = Yes
+  share_instance = Yes
+  instance_name = meshtastic-gateway
+
+[logging]
+  loglevel = 4
+
+[interfaces]
+  [[Meshtastic LoRa hub]]
+    type = RNSMeshtasticInterface
+    enabled = Yes
+    mode = gateway
+
+    transport = native
+    connection = tcp
+    tcp_host = 192.0.2.10
+    tcp_port = 4403
+    channel_index = 0
+    hop_limit = 3
+    tx_interval = 2.0
+
+    # Use broadcast first. After it passes the radio test, change to:
+    # mesh_mode = gateway_unicast
+    # gateway_role = hub
+    mesh_mode = broadcast
+    gateway_role = client
+
+    # Reticulum IFAC. Replace both values on every real installation.
+    network_name = CHANGE-ME-rns-meshtastic
+    passphrase = CHANGE-ME-long-random-passphrase
+
+  [[LAN and VPN clients]]
+    type = TCPServerInterface
+    enabled = Yes
+    mode = gateway
+    listen_ip = 0.0.0.0
+    listen_port = 4242
+
+    # Keep port 4242 behind a host firewall and LAN/VPN.
+    network_name = CHANGE-ME-rns-tcp
+    passphrase = CHANGE-ME-another-long-random-passphrase
+

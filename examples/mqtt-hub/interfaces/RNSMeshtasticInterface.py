@@ -1,0 +1,3 @@
+from rns_meshtastic.interface import RNSMeshtasticInterface
+
+interface_class = RNSMeshtasticInterface

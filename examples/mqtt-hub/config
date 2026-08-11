@@ -1,0 +1,30 @@
+[reticulum]
+  enable_transport = Yes
+  share_instance = No
+  instance_name = rns-mqtt-hub
+
+[logging]
+  loglevel = 4
+
+[interfaces]
+  [[MQTT unicast hub]]
+    type = RNSMeshtasticInterface
+    enabled = Yes
+    mode = gateway
+
+    transport = mqtt
+    mesh_mode = gateway_unicast
+    gateway_role = hub
+    allowed_nodes = !b0000002
+    mqtt_host = 127.0.0.1
+    mqtt_port = 18883
+    mqtt_root = rns-test/EU_868
+    mqtt_channel = RNS-Test
+    virtual_node_id = !a0000001
+    mqtt_downlink_hops = 0
+    mqtt_qos = 1
+    tx_interval = 0
+
+    network_name = rns-meshtastic-unicast-test
+    passphrase = local-integration-test-only
+
