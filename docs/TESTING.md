@@ -116,18 +116,16 @@ created Reticulum peer interface for !b0000002
 което проверява дали вторият client получава същия port-76 payload:
 
 ```bash
-read -rsp 'MQTT password: ' MESHTASTIC_MQTT_PASSWORD
-export MESHTASTIC_MQTT_PASSWORD
-echo
-
 uv run rns-meshtastic mqtt-smoke \
   --host mqtt.meshtastic.vip \
   --port 1883 \
   --root msh/Bulgaria \
   --username meshdev
-
-unset MESHTASTIC_MQTT_PASSWORD
 ```
+
+Командата пита интерактивно за паролата без да я показва и работи еднакво под
+bash, zsh и fish. За automation може вместо това предварително да зададете
+environment променливата `MESHTASTIC_MQTT_PASSWORD`.
 
 Очакваният резултат е:
 
@@ -329,6 +327,42 @@ decoded binary ServiceEnvelope, а физическият gateway го крип�
 преди LoRa предаването. Използвайте отделен RNS channel, TLS и broker ACL. Самият
 Reticulum packet остава криптографски защитен, но broker-ът вижда транспортните
 метаданни.
+
+### MQTT→LoRa routing probe
+
+Преди пълен Reticulum/LXMF тест проверете downlink-а с един малък port-76
+packet и задължителен Meshtastic routing ACK. Командата не изисква Reticulum
+bridge на target устройството:
+
+```bash
+uv run rns-meshtastic mqtt-radio-probe \
+  --host mqtt.meshtastic.vip \
+  --port 1883 \
+  --root msh/Bulgaria \
+  --channel HQ \
+  --channel-index 0 \
+  --source '!ee00a111' \
+  --destination '!a1b3b3b8' \
+  --hops 3 \
+  --username meshdev
+```
+
+Паролата се въвежда скрито. Очакваният край е:
+
+```text
+routing ACK: gateway=!........ source=!a1b3b3b8 destination=!ee00a111 error=NONE
+MQTT radio probe passed
+```
+
+Това доказва broker→gateway→LoRa доставката и обратния LoRa→MQTT ACK. Не
+доказва, че target устройството има Reticulum/LXMF bridge — за това е нужен
+последващ RNCP или LXMF end-to-end тест.
+
+На 11 август 2026 г. проверката премина през `mqtt.meshtastic.vip`, физически
+gateway `!8fd13c64` и target T-LoRa Pager `!a1b3b3b8` по `HQ`. Предварителен
+traceroute с изключен MQTT показа един relay напред. Probe-ът с `--hops 3`
+получи `ROUTING_ERROR_NONE`, което потвърди, че този broker path не е ограничил
+пакета до zero-hop.
 
 ### Broker-и без zero-hop policy
 

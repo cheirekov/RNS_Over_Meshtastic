@@ -18,7 +18,9 @@
     mqtt_port = 8883
     mqtt_tls = Yes
     mqtt_username = CHANGE-ME
-    mqtt_password = CHANGE-ME
+    # Prefer an environment variable inherited by rnsd. Alternatively use
+    # mqtt_password directly, with restrictive permissions on this file.
+    mqtt_password_env = MESHTASTIC_MQTT_PASSWORD
     mqtt_root = bgmesh/EU_868
     mqtt_channel = RNS
     virtual_node_id = !aabbcc11
@@ -40,4 +42,3 @@
     listen_port = 4242
     network_name = CHANGE-ME-rns-tcp
     passphrase = CHANGE-ME-another-long-random-passphrase
-

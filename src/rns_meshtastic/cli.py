@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import secrets
 import shutil
+import ssl
 import sys
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
-from rns_meshtastic.addresses import format_node_id
+from rns_meshtastic.addresses import BROADCAST_ID, format_node_id, parse_node_id
 from rns_meshtastic.framing import FragmentProtocol
 
 
@@ -64,34 +67,88 @@ def _radio_info(args: argparse.Namespace) -> int:
         if metadata is not None:
             print(f"firmware={getattr(metadata, 'firmware_version', 'unknown')}")
         print(f"known_nodes={len(interface.nodesByNum)}")
+        if args.node_id:
+            target_id = format_node_id(args.node_id)
+            node = interface.nodesByNum.get(parse_node_id(target_id))
+            print(f"node_lookup={target_id}")
+            if node is None:
+                print("  known=False")
+            else:
+                user = node.get("user") or {}
+                last_heard = node.get("lastHeard")
+                last_heard_iso = datetime.fromtimestamp(last_heard, UTC).isoformat() if last_heard else None
+                public_key = user.get("publicKey") or node.get("publicKey")
+                print("  known=True")
+                print(f"  long_name={user.get('longName')!r}")
+                print(f"  short_name={user.get('shortName')!r}")
+                print(f"  last_heard={last_heard_iso!r}")
+                print(f"  snr={node.get('snr')!r}")
+                print(f"  hops_away={node.get('hopsAway')!r}")
+                print(f"  via_mqtt={node.get('viaMqtt')!r}")
+                print(f"  channel={node.get('channel')!r}")
+                print(f"  public_key_known={bool(public_key)}")
         local = interface.localNode
         if local is not None and getattr(local, "localConfig", None) is not None:
+            from meshtastic.protobuf import config_pb2
+
             lora = local.localConfig.lora
-            print(f"region={lora.region}")
-            print(f"modem_preset={lora.modem_preset}")
+            region_name = config_pb2.Config.LoRaConfig.RegionCode.Name(lora.region)
+            preset_name = config_pb2.Config.LoRaConfig.ModemPreset.Name(lora.modem_preset)
+            print(f"region={region_name} ({lora.region})")
+            print(f"modem_preset={preset_name} ({lora.modem_preset})")
             print(f"hop_limit={lora.hop_limit}")
+            print(f"config_ok_to_mqtt={lora.config_ok_to_mqtt}")
+            print(f"ignore_mqtt={lora.ignore_mqtt}")
         print("channels:")
+        from meshtastic.protobuf import channel_pb2
+
         for channel in getattr(local, "channels", []) or []:
             settings = channel.settings
+            role_name = channel_pb2.Channel.Role.Name(channel.role)
             print(
-                f"  index={channel.index} role={channel.role} name={settings.name!r} "
+                f"  index={channel.index} role={role_name} ({channel.role}) "
+                f"name={settings.name!r} "
                 f"uplink={settings.uplink_enabled} downlink={settings.downlink_enabled}"
             )
+        module_config = getattr(local, "moduleConfig", None)
+        if module_config is not None:
+            mqtt = module_config.mqtt
+            print("mqtt:")
+            print(f"  enabled={mqtt.enabled}")
+            print(f"  address={mqtt.address!r}")
+            print(f"  root={mqtt.root!r}")
+            print(f"  tls_enabled={mqtt.tls_enabled}")
+            print(f"  encryption_enabled={mqtt.encryption_enabled}")
+            print(f"  json_enabled={mqtt.json_enabled}")
         return 0
     finally:
+        # TCPInterface can return while its reader thread is still completing
+        # the config callback that starts the first heartbeat. Let that callback
+        # settle before closing, then cancel the long-running timer explicitly.
+        time.sleep(0.5)
+        heartbeat_timer = getattr(interface, "heartbeatTimer", None)
+        if heartbeat_timer is not None:
+            heartbeat_timer.cancel()
         interface.close()
-        time.sleep(0.25)
+
+
+def _mqtt_password(args: argparse.Namespace) -> str | None:
+    password = os.environ.get(args.password_env)
+    if args.username and password is None:
+        try:
+            password = getpass.getpass("MQTT password: ")
+        except (EOFError, KeyboardInterrupt):
+            raise RuntimeError(f"set {args.password_env} when no interactive terminal is available") from None
+    return password
 
 
 def _mqtt_smoke(args: argparse.Namespace) -> int:
     from rns_meshtastic.transports.mqtt import MqttBackend, MqttConfig
 
-    password = os.environ.get(args.password_env)
-    if args.username and password is None:
-        print(
-            f"set the {args.password_env} environment variable for MQTT authentication",
-            file=sys.stderr,
-        )
+    try:
+        password = _mqtt_password(args)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
 
     channel = f"RNSX{secrets.token_hex(3).upper()}"
@@ -146,6 +203,139 @@ def _mqtt_smoke(args: argparse.Namespace) -> int:
         receiver.close()
 
 
+def _mqtt_radio_probe(args: argparse.Namespace) -> int:
+    import paho.mqtt.client as mqtt
+    from meshtastic.protobuf import mesh_pb2, mqtt_pb2, portnums_pb2
+
+    try:
+        password = _mqtt_password(args)
+        source_id = format_node_id(args.source)
+        destination_id = format_node_id(args.destination)
+    except (RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if source_id == BROADCAST_ID or destination_id == BROADCAST_ID:
+        print("radio probe requires unicast source and destination Node IDs", file=sys.stderr)
+        return 2
+    if not 0 <= args.hops <= 7 or not 0 <= args.channel_index <= 7:
+        print("hops and channel-index must be between 0 and 7", file=sys.stderr)
+        return 2
+
+    source_num = parse_node_id(source_id)
+    destination_num = parse_node_id(destination_id)
+    packet_id = secrets.randbelow(0xFFFFFFFE) + 1
+    subscribed = threading.Event()
+    acked = threading.Event()
+    errors: list[str] = []
+
+    def on_connect(client, userdata, flags, reason_code, properties):
+        del userdata, flags, properties
+        if bool(getattr(reason_code, "is_failure", False)):
+            errors.append(f"MQTT connection rejected: {reason_code}")
+            return
+        client.subscribe(
+            f"{args.root.rstrip('/')}/2/e/{args.channel}/+",
+            qos=args.qos,
+        )
+
+    def on_subscribe(client, userdata, mid, reason_codes, properties):
+        del client, userdata, mid, properties
+        if any(bool(getattr(code, "is_failure", False)) for code in reason_codes):
+            errors.append(f"MQTT subscription rejected: {reason_codes}")
+            return
+        subscribed.set()
+
+    def on_message(client, userdata, message):
+        del client, userdata
+        try:
+            envelope = mqtt_pb2.ServiceEnvelope.FromString(message.payload)
+            if not envelope.HasField("packet") or not envelope.packet.HasField("decoded"):
+                return
+            packet = envelope.packet
+            data = packet.decoded
+            if data.portnum != portnums_pb2.PortNum.ROUTING_APP or data.request_id != packet_id:
+                return
+            routing = mesh_pb2.Routing.FromString(data.payload)
+            packet_source = int(getattr(packet, "from")) & 0xFFFFFFFF
+            packet_destination = int(packet.to) & 0xFFFFFFFF
+            error_name = mesh_pb2.Routing.Error.Name(routing.error_reason)
+            print(
+                f"routing ACK: gateway={envelope.gateway_id} "
+                f"source={format_node_id(packet_source)} "
+                f"destination={format_node_id(packet_destination)} error={error_name}"
+            )
+            if (
+                packet_source == destination_num
+                and packet_destination == source_num
+                and routing.error_reason == mesh_pb2.Routing.Error.NONE
+            ):
+                acked.set()
+        except Exception as exc:
+            errors.append(f"ignored invalid MQTT response: {exc}")
+
+    client = mqtt.Client(
+        mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"rns-probe-{packet_id:08x}",
+        clean_session=True,
+    )
+    if args.username:
+        client.username_pw_set(args.username, password)
+    if args.tls:
+        certificate_requirement = ssl.CERT_NONE if args.tls_insecure else ssl.CERT_REQUIRED
+        client.tls_set(cert_reqs=certificate_requirement)
+        client.tls_insecure_set(args.tls_insecure)
+    client.on_connect = on_connect
+    client.on_subscribe = on_subscribe
+    client.on_message = on_message
+
+    try:
+        client.connect(args.host, args.port, keepalive=60)
+        client.loop_start()
+        if not subscribed.wait(args.timeout):
+            detail = errors[-1] if errors else "connection/subscription timeout"
+            print(f"MQTT radio probe failed: {detail}", file=sys.stderr)
+            return 1
+
+        packet = mesh_pb2.MeshPacket()
+        setattr(packet, "from", source_num)
+        packet.to = destination_num
+        packet.id = packet_id
+        packet.channel = args.channel_index
+        packet.hop_limit = args.hops
+        packet.hop_start = args.hops
+        packet.want_ack = True
+        packet.priority = mesh_pb2.MeshPacket.Priority.RELIABLE
+        packet.decoded.portnum = portnums_pb2.PortNum.RETICULUM_TUNNEL_APP
+        packet.decoded.payload = b"rns-mqtt-lora-probe-" + secrets.token_bytes(8)
+        packet.decoded.bitfield = 1  # Sender permits MQTT forwarding.
+
+        envelope = mqtt_pb2.ServiceEnvelope()
+        envelope.packet.CopyFrom(packet)
+        envelope.channel_id = args.channel
+        envelope.gateway_id = source_id
+        topic = f"{args.root.rstrip('/')}/2/e/{args.channel}/{source_id}"
+        publish = client.publish(
+            topic,
+            envelope.SerializeToString(),
+            qos=args.qos,
+            retain=False,
+        )
+        publish.wait_for_publish(args.timeout)
+        print(
+            f"probe published: id={packet_id} source={source_id} "
+            f"destination={destination_id} hops={args.hops} retain=false"
+        )
+        if not acked.wait(args.timeout):
+            detail = errors[-1] if errors else "no matching routing ACK"
+            print(f"MQTT radio probe failed: {detail}", file=sys.stderr)
+            return 1
+        print("MQTT radio probe passed")
+        return 0
+    finally:
+        client.disconnect()
+        client.loop_stop()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rns-meshtastic")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -161,6 +351,7 @@ def build_parser() -> argparse.ArgumentParser:
     info.add_argument("--tcp-host")
     info.add_argument("--tcp-port", type=int, default=4403)
     info.add_argument("--serial-port")
+    info.add_argument("--node-id", help="show safe NodeDB reachability metadata")
     info.set_defaults(func=_radio_info)
 
     smoke = sub.add_parser(
@@ -180,6 +371,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     smoke.add_argument("--timeout", type=float, default=10.0)
     smoke.set_defaults(func=_mqtt_smoke)
+
+    probe = sub.add_parser(
+        "mqtt-radio-probe",
+        help="send an MQTT downlink probe and require a LoRa routing ACK",
+    )
+    probe.add_argument("--host", required=True)
+    probe.add_argument("--port", type=int, default=1883)
+    probe.add_argument("--root", required=True)
+    probe.add_argument("--channel", required=True)
+    probe.add_argument("--channel-index", type=int, required=True)
+    probe.add_argument("--source", required=True, help="virtual Meshtastic Node ID")
+    probe.add_argument("--destination", required=True, help="physical Meshtastic Node ID")
+    probe.add_argument("--hops", type=int, default=0)
+    probe.add_argument("--username")
+    probe.add_argument("--password-env", default="MESHTASTIC_MQTT_PASSWORD")
+    probe.add_argument("--qos", type=int, choices=(0, 1, 2), default=1)
+    probe.add_argument("--tls", action="store_true")
+    probe.add_argument("--tls-insecure", action="store_true")
+    probe.add_argument("--timeout", type=float, default=30.0)
+    probe.set_defaults(func=_mqtt_radio_probe)
     return parser
 
 

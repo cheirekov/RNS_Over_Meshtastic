@@ -47,6 +47,7 @@ class NativeBackend(TransportBackend):
         self._pub: Any | None = None
         self._lock = threading.RLock()
         self._closed = False
+        self._online = False
 
     def start(self, packet_callback: PacketCallback, state_callback: StateCallback) -> None:
         from meshtastic.protobuf import portnums_pb2
@@ -79,7 +80,7 @@ class NativeBackend(TransportBackend):
             with self._lock:
                 self._interface = interface
             self._set_local_node(interface)
-            state_callback(True, None)
+            self._notify_connected()
         except Exception as exc:
             self.close()
             state_callback(False, str(exc))
@@ -105,6 +106,7 @@ class NativeBackend(TransportBackend):
             if self._closed:
                 return
             self._closed = True
+            self._online = False
             interface, self._interface = self._interface, None
         if self._pub is not None:
             for callback, topic in (
@@ -130,12 +132,16 @@ class NativeBackend(TransportBackend):
             if self._interface is None:
                 self._interface = interface
         self._set_local_node(interface)
-        if self._state_callback:
-            self._state_callback(True, None)
+        self._notify_connected()
 
     def _on_disconnected(self, interface: Any, topic: Any = None) -> None:
         del topic
-        if self._belongs_to_us(interface) and self._state_callback:
+        if not self._belongs_to_us(interface):
+            return
+        with self._lock:
+            was_online = self._online
+            self._online = False
+        if was_online and self._state_callback:
             self._state_callback(False, "PhoneAPI connection lost")
 
     def _on_receive(self, packet: dict[str, Any], interface: Any) -> None:
@@ -164,3 +170,11 @@ class NativeBackend(TransportBackend):
             self.local_node_id = format_node_id(node_num)
         except Exception:
             self.local_node_id = None
+
+    def _notify_connected(self) -> None:
+        with self._lock:
+            if self._online:
+                return
+            self._online = True
+        if self._state_callback:
+            self._state_callback(True, None)

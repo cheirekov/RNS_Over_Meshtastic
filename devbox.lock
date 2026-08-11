@@ -1,0 +1,184 @@
+{
+  "lockfile_version": "1",
+  "packages": {
+    "github:NixOS/nixpkgs/nixpkgs-unstable": {
+      "last_modified": "2026-07-20T13:48:30Z",
+      "resolved": "github:NixOS/nixpkgs/421eebfd0ec7bccd4abe826ce62d7e6e83129493?lastModified=1784555310&narHash=sha256-%2FFCliTPgiuV1owejZFNx3Ch9irdvkOfOFl%2BHHZ%2BDrtM%3D"
+    },
+    "mosquitto@latest": {
+      "last_modified": "2026-08-10T07:49:06Z",
+      "resolved": "github:NixOS/nixpkgs/d482ef84049d9b7276b83a06e4e4d76983830097#mosquitto",
+      "source": "devbox-search",
+      "version": "2.1.2",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/461jzpgxm0d49napmr027bvy4dn6sfkm-mosquitto-2.1.2",
+              "default": true
+            },
+            {
+              "name": "dev",
+              "path": "/nix/store/jbsmh0zn40f5jfvn9h8glnvmwr3v3p39-mosquitto-2.1.2-dev"
+            },
+            {
+              "name": "lib",
+              "path": "/nix/store/nwxgmna1f842s4cqdnlfpsr9xs0pwx0m-mosquitto-2.1.2-lib"
+            }
+          ],
+          "store_path": "/nix/store/461jzpgxm0d49napmr027bvy4dn6sfkm-mosquitto-2.1.2"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/8dv4zja4akgksgf5b32knlfmp10fmlnc-mosquitto-2.1.2",
+              "default": true
+            },
+            {
+              "name": "dev",
+              "path": "/nix/store/77jn5jchmd6mf6vrkb59w2jh31mxsajz-mosquitto-2.1.2-dev"
+            },
+            {
+              "name": "lib",
+              "path": "/nix/store/1k86qrwfczfhyjj44i7dlkbvk2a0dsqk-mosquitto-2.1.2-lib"
+            }
+          ],
+          "store_path": "/nix/store/8dv4zja4akgksgf5b32knlfmp10fmlnc-mosquitto-2.1.2"
+        },
+        "x86_64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/120ahzp8lqjb9vahwlnc2n4msglcyb9z-mosquitto-2.1.2",
+              "default": true
+            },
+            {
+              "name": "dev",
+              "path": "/nix/store/j2dm66dq204sl8s8zas4z1n26lz0pa6j-mosquitto-2.1.2-dev"
+            },
+            {
+              "name": "lib",
+              "path": "/nix/store/frc10a4fgwap91dffd66nxic1x99ghqz-mosquitto-2.1.2-lib"
+            }
+          ],
+          "store_path": "/nix/store/120ahzp8lqjb9vahwlnc2n4msglcyb9z-mosquitto-2.1.2"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/d29mgfsgbwsfzzc0rgq5xc6irxgjcmf9-mosquitto-2.1.2",
+              "default": true
+            },
+            {
+              "name": "dev",
+              "path": "/nix/store/mr9bicr64lxzhv0d5q1d6rqxk86yn7v1-mosquitto-2.1.2-dev"
+            },
+            {
+              "name": "lib",
+              "path": "/nix/store/fy29lxwa979i4973jrwrg6nawkqa9y7i-mosquitto-2.1.2-lib"
+            }
+          ],
+          "store_path": "/nix/store/d29mgfsgbwsfzzc0rgq5xc6irxgjcmf9-mosquitto-2.1.2"
+        }
+      }
+    },
+    "python312@latest": {
+      "last_modified": "2026-08-01T16:34:20Z",
+      "plugin_version": "0.0.4",
+      "resolved": "github:NixOS/nixpkgs/a5cbcfe954791221bfffe2307f7d1a1bf61a871e#python312",
+      "source": "devbox-search",
+      "version": "3.12.13",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/zqqyh50h5ci4yqa3wfjxxk1wc3n5v526-python3-3.12.13",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/zqqyh50h5ci4yqa3wfjxxk1wc3n5v526-python3-3.12.13"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/0fvick5jp1i2v98lk5r7zix15mrdl1vk-python3-3.12.13",
+              "default": true
+            },
+            {
+              "name": "debug",
+              "path": "/nix/store/mr9yam6djs7g22zjxlydrb8lfpp28wn7-python3-3.12.13-debug"
+            }
+          ],
+          "store_path": "/nix/store/0fvick5jp1i2v98lk5r7zix15mrdl1vk-python3-3.12.13"
+        },
+        "x86_64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/afd3xzw8afbbr1dsqjvb6xg2a5gah4vg-python3-3.12.13",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/afd3xzw8afbbr1dsqjvb6xg2a5gah4vg-python3-3.12.13"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/27v7vpgbvn915ixsvmj94pvnygczqxsi-python3-3.12.13",
+              "default": true
+            },
+            {
+              "name": "debug",
+              "path": "/nix/store/bqnfy3w2isz3q2gyyff4r2rrcvb1l1rg-python3-3.12.13-debug"
+            }
+          ],
+          "store_path": "/nix/store/27v7vpgbvn915ixsvmj94pvnygczqxsi-python3-3.12.13"
+        }
+      }
+    },
+    "uv@latest": {
+      "last_modified": "2026-08-01T16:34:20Z",
+      "resolved": "github:NixOS/nixpkgs/a5cbcfe954791221bfffe2307f7d1a1bf61a871e#uv",
+      "source": "devbox-search",
+      "version": "0.12.1",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/hnmvqbh6zd1v0wss6q9ps8j1jp2pfkf0-uv-0.12.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/hnmvqbh6zd1v0wss6q9ps8j1jp2pfkf0-uv-0.12.1"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/xn0b6fcg7zzifjjbpzi6bs57nbyjxqn1-uv-0.12.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/xn0b6fcg7zzifjjbpzi6bs57nbyjxqn1-uv-0.12.1"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/6fgvwx21832s8ygpzm4x3i29p4ac8gxn-uv-0.12.1",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/6fgvwx21832s8ygpzm4x3i29p4ac8gxn-uv-0.12.1"
+        }
+      }
+    }
+  }
+}

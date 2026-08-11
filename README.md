@@ -22,11 +22,16 @@ protocol to the Android foreground-service bridge.
 
 Verified on 11 August 2026:
 
-- 22 protocol/backend tests;
+- 26 protocol/backend tests;
 - real `rncp` transfer through the local MQTT broadcast configuration;
 - real bidirectional `rncp` transfer through the unicast hub child interface;
 - binary port-76 publish/subscribe on `mqtt.meshtastic.vip:1883` under
   `msh/Bulgaria` (broker transport only; no physical LoRa gateway was involved).
+- a pure-LoRa traceroute with MQTT disabled from the physical gateway to a
+  T-LoRa Pager through one forward relay;
+- an MQTT port-76 downlink through the physical gateway to that pager, with a
+  successful LoRa routing ACK returned through MQTT. The probe used three hops,
+  and therefore also verifies that this broker path did not enforce zero-hop.
 
 See [docs/TESTING.md](docs/TESTING.md) for exact tests, beginning with tests that
 need neither a radio nor an MQTT broker.

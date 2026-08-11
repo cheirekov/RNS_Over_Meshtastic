@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 import queue
 import threading
 from dataclasses import dataclass
@@ -137,11 +138,17 @@ class RNSMeshtasticInterface(Interface):
             )
             return NativeBackend(native)
 
+        mqtt_password = _optional(config, "mqtt_password")
+        mqtt_password_env = _optional(config, "mqtt_password_env")
+        if mqtt_password_env:
+            mqtt_password = os.environ.get(mqtt_password_env)
+            if mqtt_password is None:
+                raise ValueError(f"MQTT password environment variable {mqtt_password_env!r} is not set")
         mqtt = MqttConfig(
             host=str(config.get("mqtt_host", "")).strip(),
             port=_int(config, "mqtt_port", 1883),
             username=_optional(config, "mqtt_username"),
-            password=_optional(config, "mqtt_password"),
+            password=mqtt_password,
             tls=_bool(config, "mqtt_tls", False),
             tls_insecure=_bool(config, "mqtt_tls_insecure", False),
             root=str(config.get("mqtt_root", "msh/EU_868")).strip().rstrip("/"),
