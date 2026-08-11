@@ -1,0 +1,12 @@
+services:
+  android-build:
+    build:
+      context: .
+    working_dir: /workspace/android
+    volumes:
+      - .:/workspace/android
+      - gradle-cache:/home/gradle/.gradle
+    command: ["gradle", "--no-daemon", "testDebugUnitTest", "assembleDebug"]
+
+volumes:
+  gradle-cache:

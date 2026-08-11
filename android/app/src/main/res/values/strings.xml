@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">RNS Meshtastic Bridge</string>
+    <string name="service_channel">Reticulum bridge</string>
+    <string name="service_running">Reticulum ↔ Meshtastic bridge is running</string>
+</resources>

@@ -16,9 +16,10 @@ the radios with the official Meshtastic client first.
 
 ## Current status
 
-This repository currently contains the Linux/NixOS gateway MVP. It is intended
-to prove and measure the radio and MQTT transports before binding the same wire
-protocol to the Android foreground-service bridge.
+This repository contains the Linux/NixOS gateway and a native Android
+foreground-service bridge. The Android app exposes a loopback-only Reticulum
+TCP endpoint to Sideband/Columba and connects directly to Meshtastic TCP
+PhoneAPI or BLE; it does not depend on the Meshtastic Android app.
 
 Verified on 11 August 2026:
 
@@ -32,9 +33,16 @@ Verified on 11 August 2026:
 - an MQTT port-76 downlink through the physical gateway to that pager, with a
   successful LoRa routing ACK returned through MQTT. The probe used three hops,
   and therefore also verifies that this broker path did not enforce zero-hop.
+- a containerised Android API 35 build, six Android protocol tests, and a debug
+  APK assembled without installing Gradle or the Android SDK on the host.
+- the Android codec's two-stage PhoneAPI handshake against `172.16.16.115`,
+  returning `!8fd13c64` and completing after 231 `FromRadio` frames.
 
 See [docs/TESTING.md](docs/TESTING.md) for exact tests, beginning with tests that
 need neither a radio nor an MQTT broker.
+
+For the two-phone scenario (one phone with a Meshtastic radio, one without),
+see [docs/ANDROID_TESTING.md](docs/ANDROID_TESTING.md).
 
 ## Quick start
 

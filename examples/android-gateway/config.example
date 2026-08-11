@@ -1,0 +1,47 @@
+[reticulum]
+  enable_transport = Yes
+  share_instance = Yes
+  instance_name = android-meshtastic-gateway
+
+[logging]
+  loglevel = 4
+
+[interfaces]
+  [[HQ Meshtastic hub]]
+    type = RNSMeshtasticInterface
+    enabled = Yes
+    mode = gateway
+
+    transport = native
+    connection = tcp
+    tcp_host = 172.16.16.115
+    tcp_port = 4403
+    channel_index = 0
+    hop_limit = 3
+    tx_interval = 2.0
+
+    mesh_mode = gateway_unicast
+    gateway_role = hub
+    accept_broadcast_on_hub = No
+
+    # Keep this commented until the first phone-to-gateway packet appears.
+    # Then restrict it to the Meshtastic Node IDs of the phone radios.
+    # allowed_nodes = !a1b3b3b8
+
+    want_ack = No
+    pki_required = No
+
+    # These two values MUST exactly match Phone A's Sideband TCP IFAC fields.
+    network_name = CHANGE-ME-phone-lora-ifac
+    passphrase = CHANGE-ME-long-random-phone-lora-passphrase
+
+  [[LAN VPN Sideband clients]]
+    type = TCPServerInterface
+    enabled = Yes
+    mode = gateway
+    listen_ip = 0.0.0.0
+    listen_port = 4242
+
+    # These two values are for Phone B; do not reuse the LoRa-side values.
+    network_name = CHANGE-ME-lan-ifac
+    passphrase = CHANGE-ME-long-random-lan-passphrase
