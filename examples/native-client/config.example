@@ -28,6 +28,7 @@
     want_ack = No
     pki_required = No
 
+    # Reticulum config expresses this value in bits.
+    ifac_size = 128
     network_name = CHANGE-ME-rns-meshtastic
     passphrase = CHANGE-ME-long-random-passphrase
-

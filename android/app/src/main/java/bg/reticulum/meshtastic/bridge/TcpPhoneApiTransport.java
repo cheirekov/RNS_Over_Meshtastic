@@ -23,6 +23,7 @@ final class TcpPhoneApiTransport implements RadioTransport {
     private volatile Socket socket;
     private volatile OutputStream output;
     private volatile long localNode;
+    private volatile boolean mqttUplinkPermitted;
     private volatile boolean nodeInfoRequested;
     private Listener listener;
     private Thread worker;
@@ -62,6 +63,7 @@ final class TcpPhoneApiTransport implements RadioTransport {
                 socket = null;
                 output = null;
                 localNode = 0;
+                mqttUplinkPermitted = false;
                 nodeInfoRequested = false;
             }
             if (!closed) sleep(3_000);
@@ -85,6 +87,10 @@ final class TcpPhoneApiTransport implements RadioTransport {
                 localNode = message.myNodeNumber;
                 listener.onLocalNode(localNode);
             }
+            if (message.configOkToMqtt != null) {
+                mqttUplinkPermitted = message.configOkToMqtt;
+                listener.onRadioState(true, "Radio MQTT uplink permission: " + mqttUplinkPermitted);
+            }
             if (message.configCompleteId != null
                     && message.configCompleteId == CONFIG_NONCE
                     && !nodeInfoRequested) {
@@ -92,7 +98,8 @@ final class TcpPhoneApiTransport implements RadioTransport {
                 synchronized (writeLock) { writePhoneApi(ProtoCodec.wantConfig(NODE_INFO_NONCE)); }
                 listener.onRadioState(true, "PhoneAPI config loaded; reading node database");
             } else if (message.configCompleteId != null && message.configCompleteId == NODE_INFO_NONCE) {
-                listener.onRadioState(true, "PhoneAPI handshake complete as " + NodeId.format(localNode));
+                listener.onRadioState(true, "PhoneAPI handshake complete as " + NodeId.format(localNode)
+                        + "; MQTT uplink permission: " + mqttUplinkPermitted);
             }
             if (message.packet != null && message.packet.port == ProtoCodec.RETICULUM_PORT) {
                 listener.onPacket(message.packet);
@@ -107,9 +114,12 @@ final class TcpPhoneApiTransport implements RadioTransport {
         int id = packetId.updateAndGet(previous -> previous == -1 ? 1 : previous + 1);
         byte[] message = ProtoCodec.toRadioPacket(
                 localNode, destination, id, config.channel, config.hops,
-                config.wantAck && destination != NodeId.BROADCAST, payload);
+                config.wantAck && destination != NodeId.BROADCAST,
+                mqttUplinkPermitted, payload);
         synchronized (writeLock) { writePhoneApi(message); }
     }
+
+    @Override public boolean isReady() { return localNode != 0; }
 
     private void sendHeartbeat() {
         if (closed || output == null) return;

@@ -87,19 +87,36 @@ class NativeBackend(TransportBackend):
             raise
 
     def send(self, payload: bytes, destination: str) -> None:
+        from meshtastic.protobuf import mesh_pb2
+
         with self._lock:
             if self._closed or self._interface is None:
                 raise ConnectionError("Meshtastic PhoneAPI is not connected")
-            self._interface.sendData(
-                payload,
+            # MeshInterface.sendData() does not currently expose Data.bitfield.
+            # Build explicitly so the packet carries the radio owner's current
+            # config_ok_to_mqtt policy, including across auto-PKI handling.
+            packet = mesh_pb2.MeshPacket()
+            packet.channel = self.config.channel_index
+            packet.decoded.payload = payload
+            packet.decoded.portnum = self._portnum
+            if self._mqtt_uplink_permitted(self._interface):
+                packet.decoded.bitfield = 1  # BITFIELD_OK_TO_MQTT_MASK
+            packet.priority = mesh_pb2.MeshPacket.Priority.RELIABLE
+            self._interface._sendPacket(
+                packet,
                 destinationId=destination,
-                portNum=self._portnum,
                 wantAck=self.config.want_ack and destination != BROADCAST_ID,
-                wantResponse=False,
-                channelIndex=self.config.channel_index,
                 hopLimit=self.config.hop_limit,
                 pkiEncrypted=self.config.pki_required and destination != BROADCAST_ID,
             )
+
+    @staticmethod
+    def _mqtt_uplink_permitted(interface: Any) -> bool:
+        """Mirror the radio's privacy policy for auto-PKI PhoneAPI packets."""
+        try:
+            return bool(interface.localNode.localConfig.lora.config_ok_to_mqtt)
+        except (AttributeError, TypeError):
+            return False
 
     def close(self) -> None:
         with self._lock:

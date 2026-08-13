@@ -20,6 +20,7 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     private final AtomicLong meshToRns = new AtomicLong();
     private volatile String radioState = "radio starting";
     private volatile String clientState = "Reticulum starting";
+    private volatile long localNode;
 
     BridgeEngine(Context context, BridgeConfig config, StatusListener status) {
         this.config = config;
@@ -43,12 +44,14 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     }
 
     @Override public void onLocalNode(long nodeNumber) {
-        radioState = "Meshtastic ready as " + NodeId.format(nodeNumber);
+        localNode = nodeNumber;
+        String transportName = config.transport.equals("ble") ? "BLE" : "TCP";
+        radioState = transportName + " Meshtastic ready as " + NodeId.format(nodeNumber);
         publish();
     }
 
     @Override public void onPacket(ProtoCodec.RadioPacket packet) {
-        if (packet.channel != config.channel || packet.port != ProtoCodec.RETICULUM_PORT) return;
+        if (!acceptsInbound(packet, config.channel, localNode)) return;
         String source = NodeId.format(packet.source);
         if (!config.acceptsSource(source)) return;
         try {
@@ -62,6 +65,18 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
         } catch (Exception error) {
             status.onStatus("Dropped port 76 packet from " + source + ": " + useful(error));
         }
+    }
+
+    static boolean acceptsInbound(ProtoCodec.RadioPacket packet, int configuredChannel, long localNode) {
+        if (packet.port != ProtoCodec.RETICULUM_PORT) return false;
+        if (packet.channel == configuredChannel) return true;
+
+        // Meshtastic 2.7 automatically upgrades unicast DMs to PKI. PKI packets
+        // have no channel context and are reported by PhoneAPI with channel 0,
+        // even if the sender selected a non-zero local channel slot. Accept only
+        // authenticated PKI unicast addressed to this radio; do not weaken the
+        // configured-channel filter for ordinary channel-encrypted packets.
+        return packet.pkiEncrypted && localNode != 0 && packet.destination == localNode;
     }
 
     @Override public void onClientState(boolean connected, String detail) {
@@ -86,6 +101,10 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
             for (int i = 0; i < transmissions.size(); i++) {
                 FragmentProtocol.Transmission tx = transmissions.get(i);
                 try {
+                    if (!awaitRadioIdentity()) {
+                        status.onStatus("Meshtastic TX timed out: radio identity was not received within 45 seconds");
+                        return;
+                    }
                     radio.send(tx.payload, NodeId.parse(tx.destination));
                     if (i + 1 < transmissions.size() && config.txIntervalMillis > 0) Thread.sleep(config.txIntervalMillis);
                 } catch (InterruptedException interrupted) {
@@ -97,6 +116,16 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                 }
             }
         });
+    }
+
+    private boolean awaitRadioIdentity() throws InterruptedException {
+        if (radio.isReady()) return true;
+        status.onStatus("Reticulum frame queued; waiting for " + config.transport.toUpperCase() + " radio identity…");
+        for (int attempt = 0; attempt < 90; attempt++) {
+            if (radio.isReady()) return true;
+            Thread.sleep(500);
+        }
+        return false;
     }
 
     private void publish() {

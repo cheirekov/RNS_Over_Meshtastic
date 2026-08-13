@@ -1,5 +1,10 @@
 # Android bridge: точен тест с два телефона
 
+Тази последователност е успешно изпълнена на 12 август 2026 г. с Pixel 6 Pro,
+T-LoRa Pager `!a1b3b3b8`, HQ channel index 0 и Linux gateway radio
+`!8fd13c64`. Sideband и Columba обмениха announce-и и двупосочни LXMF
+съобщения през BLE/LoRa bridge-а.
+
 Целта на този тест е точно първоначалният сценарий:
 
 ```text
@@ -73,7 +78,9 @@ uv run rnsd --config ./var/android-gateway -vv
    unpair-вате устройството.
 2. Отворете **RNS Meshtastic Bridge** и изберете `ble`.
 3. Натиснете **Scan for Meshtastic BLE radios**, изберете pager-а и разрешете
-   `Nearby devices` и notifications.
+   `Nearby devices` и notifications. От версия 0.1.1 изборът на резултат от
+   scan автоматично превключва `Radio transport = ble`; TCP host/port стават
+   неактивни и стойностите им не се използват.
 4. Задайте:
 
 ```text
@@ -94,11 +101,53 @@ BLE PhoneAPI handshake complete as !a1b3b3b8
 Reticulum listening on 127.0.0.1:7822
 ```
 
+При версия 0.1.4 първият ред завършва с
+`MQTT uplink permission: true` или `false`, прочетено директно от radio-то.
+
+Само появата на име/MAC в scan-а не означава BLE връзка. Системният Android
+Bluetooth екран също не е надежден индикатор за активна GATT сесия. Решаващият
+индикатор е точно `BLE ... !a1b3b3b8` в bridge status-а. Ако се покаже
+`TCP ... !8fd1336c`, трафикът минава през Wi-Fi radio `172.16.19.176`.
+
+Версия 0.1.2 показва последователно GATT connect, service discovery, MTU,
+notification setup и `MyNodeInfo`. Ако Sideband изпрати announce преди края на
+handshake-а, frame-ът чака до 45 секунди вместо да бъде отхвърлен с
+`radio identity is not available yet`. За най-чистия диагностичен опит първо
+спрете Sideband, стартирайте bridge-а самостоятелно и включете Sideband едва
+след `BLE PhoneAPI handshake complete`.
+
+Версия 0.1.3 приема автоматично PKI-криптираните Meshtastic DM пакети към
+локалното radio и при избран secondary channel. Firmware 2.7 докладва тези
+пакети през PhoneAPI с `channel = 0`, независимо от избрания локален slot.
+По-старият bridge ги отхвърляше при `Meshtastic channel index != 0`, въпреки че
+LoRa/MQTT доставката до radio-то беше успешна.
+
+Версия 0.1.4 чете `config.lora.config_ok_to_mqtt` от PhoneAPI handshake-а и
+копира това разрешение в `Data.bitfield` на изходящите port 76 пакети. Така
+auto-PKI DM носи изрично намерението на собственика и последващите MQTT gateways
+могат да го спазят. Bridge-ът не разрешава MQTT безусловно — при
+`config_ok_to_mqtt = false` bit-ът остава изключен и privacy изборът на radio-то
+се запазва. Това е protocol hardening, а не индикатор за активна broker сесия.
+
+`mqtt.enabled = true` означава само, че клиентът е конфигуриран, не че в момента
+има активна broker сесия. След включване или рестарт изчакайте MQTT reconnect;
+при disconnect firmware queue-ва пакетите. Липсата на `mesh→RNS` не трябва да
+се диагностицира само по Android броячите.
+
+За недвусмислен BLE тест след появата на `BLE PhoneAPI handshake complete as
+!a1b3b3b8` изключете Wi-Fi и mobile data само на Phone A. Loopback
+`127.0.0.1` и BLE продължават да работят. Ако announce/LXMF обменът остане
+работещ, Android телефонът не може да използва TCP radio `172.16.19.176`.
+
 Алтернативен първи тест без BLE е `tcp` към Wi-Fi Meshtastic radio на Phone A:
 задайте неговия IP и port `4403`. Не насочвайте Android bridge и Linux gateway
 едновременно към едно и също TCP radio.
 
 ## 4. Phone A: Sideband към локалния bridge
+
+За диагностичния тест оставете само един Reticulum клиент активен на Phone A.
+Bridge-ът поддържа една loopback TCP сесия; ако Sideband и Columba се опитват
+едновременно да използват port 7822, по-новата връзка заменя предишната.
 
 В Sideband отворете **Connectivity**, включете **Connect via TCP** и задайте:
 
@@ -114,6 +163,12 @@ IFAC стойностите трябва да съвпадат byte-for-byte. Н
 Transport на мобилния телефон. Рестартирайте Sideband/RNS service, защото
 Sideband прилага connectivity промените след restart. Bridge status трябва да
 се промени на `Reticulum client connected from loopback`.
+
+Sideband използва 128-bit IFAC за TCP. В Linux конфигурацията на
+`[[HQ Meshtastic hub]]` оставете `ifac_size = 128` (стойността в config е в
+битове). Версии на проекта преди поправката от 12 август 2026 г. използваха
+грешен 64-bit default и пакетите се отхвърляха тихо въпреки растящите bridge
+броячи.
 
 ## 5. Phone B: Sideband без Meshtastic radio
 
@@ -161,13 +216,33 @@ allowed_nodes = !a1b3b3b8
 | Симптом | Най-вероятна причина |
 |---|---|
 | BLE radio не се вижда | още е свързано с Meshtastic app или не advertising-ва |
-| `identity is not available yet` | PhoneAPI handshake още не е върнал `MyNodeInfo` |
+| Scan намира pager-а, но status показва TCP | избран/останaл е TCP transport; използвайте bridge 0.1.1 |
+| `identity is not available yet` с bridge 0.1.1 | PhoneAPI handshake още не е върнал `MyNodeInfo`; използвайте 0.1.2 |
+| `BLE handshake timeout: no MyNodeInfo` | pairing/GATT handshake не е завършил; запишете последната предходна BLE фаза |
+| HQ/slot 0 работи, но secondary slot не приема unicast | използвайте bridge 0.1.3; PKI DM пакетите се докладват от firmware с channel 0 |
+| LoRa DM работи, но същият auto-PKI DM не се вижда в MQTT | bridge 0.1.4 показва и пренася `config_ok_to_mqtt`; отделно потвърдете реална MQTT broker връзка |
+| `mqtt.enabled = true`, но няма broker packets | MQTT сесията на radio-то още не е свързана; това не е доказателство за bridge/Reticulum дефект |
 | Sideband не се свързва | bridge service не работи или port-ът не е 7822 |
 | Frames растат само RNS→mesh | грешен HQ PSK/index, gateway ID или няма RF route |
-| Port 76 стига Linux, но RNS го отхвърля | IFAC network name/passphrase не съвпадат |
+| Port 76 стига Linux, но RNS го отхвърля | IFAC name/passphrase или размерът му не съвпадат; за Sideband използвайте `ifac_size = 128` |
 | Phone B не се вижда | firewall/VPN/IFAC проблем на TCP 4242 |
 | Фрагменти се губят | увеличете delay първо на 3000–4000 ms |
 
 Broadcast fallback се тества чрез `Radio addressing mode = broadcast` на
 Android и `mesh_mode = broadcast`, `gateway_role = client` на Linux интерфейса.
 Не смесвайте единия край в broadcast, а другия в gateway-unicast.
+
+## След успешния първи тест
+
+Преди по-дълго използване:
+
+1. Задайте еднакви непразни IFAC `network_name` и `passphrase` на Sideband TCP
+   интерфейса на Phone A и `[[HQ Meshtastic hub]]` на Linux. Самият Android
+   bridge е прозрачен и няма отделни IFAC полета.
+2. Използвайте различна IFAC двойка за Linux TCP port 4242 и Phone B.
+3. Ограничете LoRa hub-а с `allowed_nodes = !a1b3b3b8`.
+4. Оставете Meshtastic ACK изключен при първото измерване; включвайте го само
+   ако измерените загуби го налагат, защото всеки ACK увеличава airtime.
+5. За чист LoRa тест временно изключете само MQTT на `!8fd13c64`, без да
+   изключвате Wi-Fi/TCP PhoneAPI на радиото. На Phone A изключете Wi-Fi и mobile
+   data, но оставете Bluetooth. След двупосочен LXMF тест върнете MQTT.

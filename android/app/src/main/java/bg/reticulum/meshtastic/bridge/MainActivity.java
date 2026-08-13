@@ -20,6 +20,7 @@ import android.os.Bundle;
 import android.os.ParcelUuid;
 import android.text.InputType;
 import android.view.View;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -40,6 +41,7 @@ public final class MainActivity extends Activity {
     private EditText radioHost;
     private EditText radioPort;
     private EditText bleAddress;
+    private Button bleScan;
     private EditText localPort;
     private EditText channel;
     private EditText hops;
@@ -88,10 +90,10 @@ public final class MainActivity extends Activity {
         add(form, "Meshtastic TCP port", radioPort);
         bleAddress = text("", false);
         add(form, "Meshtastic BLE MAC address", bleAddress);
-        Button scan = new Button(this);
-        scan.setText("Scan for Meshtastic BLE radios");
-        scan.setOnClickListener(ignored -> scanBle());
-        form.addView(scan);
+        bleScan = new Button(this);
+        bleScan.setText("Scan for Meshtastic BLE radios");
+        bleScan.setOnClickListener(ignored -> scanBle());
+        form.addView(bleScan);
         localPort = text("7822", true);
         add(form, "Local Reticulum TCP port", localPort);
         channel = text("0", true);
@@ -128,6 +130,14 @@ public final class MainActivity extends Activity {
         status.setPadding(0, dp(16), 0, dp(24));
         form.addView(status);
 
+        transport.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                updateTransportFields();
+            }
+
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+
         ScrollView scroll = new ScrollView(this);
         scroll.addView(form);
         return scroll;
@@ -147,12 +157,17 @@ public final class MainActivity extends Activity {
         fragmentBody.setText(String.valueOf(config.fragmentBody));
         txInterval.setText(String.valueOf(config.txIntervalMillis));
         wantAck.setChecked(config.wantAck);
+        updateTransportFields();
     }
 
     private void saveAndStart() {
         try {
+            String selectedTransport = selected(transport);
             BridgeConfig config = new BridgeConfig(
-                    selected(transport), value(radioHost), integer(radioPort), value(bleAddress),
+                    selectedTransport,
+                    selectedTransport.equals("tcp") ? value(radioHost) : "",
+                    selectedTransport.equals("tcp") ? integer(radioPort) : 4403,
+                    selectedTransport.equals("ble") ? value(bleAddress) : "",
                     integer(localPort), integer(channel), integer(hops), selected(mode), value(gateway),
                     integer(fragmentBody), integer(txInterval), wantAck.isChecked());
             if (!ensurePermissions(config)) return;
@@ -234,7 +249,12 @@ public final class MainActivity extends Activity {
             String[] labels = addresses.stream().map(found::get).toArray(String[]::new);
             new AlertDialog.Builder(this)
                     .setTitle("Select Meshtastic radio")
-                    .setItems(labels, (dialog, which) -> bleAddress.setText(addresses.get(which)))
+                    .setItems(labels, (dialog, which) -> {
+                        select(transport, "ble");
+                        bleAddress.setText(addresses.get(which));
+                        updateTransportFields();
+                        status.setText("Selected BLE radio " + labels[which] + ". Press Save & start to connect.");
+                    })
                     .setNegativeButton("Cancel", null)
                     .show();
         }, 8_000);
@@ -277,6 +297,19 @@ public final class MainActivity extends Activity {
     private static String value(EditText field) { return field.getText().toString().trim(); }
     private static int integer(EditText field) { return Integer.parseInt(value(field)); }
     private static String selected(Spinner field) { return field.getSelectedItem().toString(); }
+
+    private void updateTransportFields() {
+        if (transport == null || radioHost == null || radioPort == null || bleAddress == null || bleScan == null) return;
+        boolean tcp = selected(transport).equals("tcp");
+        radioHost.setEnabled(tcp);
+        radioPort.setEnabled(tcp);
+        bleAddress.setEnabled(!tcp);
+        bleScan.setEnabled(!tcp);
+        radioHost.setAlpha(tcp ? 1.0f : 0.45f);
+        radioPort.setAlpha(tcp ? 1.0f : 0.45f);
+        bleAddress.setAlpha(tcp ? 0.45f : 1.0f);
+        bleScan.setAlpha(tcp ? 0.45f : 1.0f);
+    }
 
     private static void select(Spinner spinner, String value) {
         for (int i = 0; i < spinner.getCount(); i++) {

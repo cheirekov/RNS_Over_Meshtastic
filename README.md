@@ -21,6 +21,12 @@ foreground-service bridge. The Android app exposes a loopback-only Reticulum
 TCP endpoint to Sideband/Columba and connects directly to Meshtastic TCP
 PhoneAPI or BLE; it does not depend on the Meshtastic Android app.
 
+Android bridge version 0.1.3 makes the active transport explicit in its
+status, switches to BLE when a scanned radio is selected, and applies changed
+configuration by restarting the running bridge engine. BLE GATT operations are
+serialized, handshake progress is reported by phase, and Reticulum frames that
+arrive before `MyNodeInfo` are held for up to 45 seconds instead of dropped.
+
 Verified on 11 August 2026:
 
 - 26 protocol/backend tests;
@@ -37,6 +43,15 @@ Verified on 11 August 2026:
   APK assembled without installing Gradle or the Android SDK on the host.
 - the Android codec's two-stage PhoneAPI handshake against `172.16.16.115`,
   returning `!8fd13c64` and completing after 231 `FromRadio` frames.
+
+Verified on 12 August 2026 on physical Android/Meshtastic hardware:
+
+- Pixel 6 Pro connected directly over BLE to T-LoRa Pager `!a1b3b3b8`;
+- the bridge completed the BLE PhoneAPI handshake and exposed its loopback
+  Reticulum TCP endpoint to Sideband and Columba;
+- announces and bidirectional LXMF messages crossed the Meshtastic LoRa mesh to
+  Linux gateway radio `!8fd13c64` (`172.16.16.115`) and onward to a second
+  Reticulum client without a Meshtastic radio.
 
 See [docs/TESTING.md](docs/TESTING.md) for exact tests, beginning with tests that
 need neither a radio nor an MQTT broker.

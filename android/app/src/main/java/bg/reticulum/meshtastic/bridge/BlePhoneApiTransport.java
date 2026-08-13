@@ -44,12 +44,15 @@ final class BlePhoneApiTransport implements RadioTransport {
     private final Queue<byte[]> writes = new ArrayDeque<>();
     private volatile boolean closed;
     private volatile long localNode;
+    private volatile boolean mqttUplinkPermitted;
     private volatile BluetoothGatt gatt;
     private BluetoothGattCharacteristic toRadio;
     private BluetoothGattCharacteristic fromRadio;
     private boolean writeBusy;
     private boolean readBusy;
     private boolean nodeInfoRequested;
+    private boolean profileConfigured;
+    private int fromRadioCount;
     private Listener listener;
 
     BlePhoneApiTransport(Context context, BridgeConfig config) {
@@ -88,8 +91,11 @@ final class BlePhoneApiTransport implements RadioTransport {
         @Override public void onConnectionStateChange(BluetoothGatt current, int status, int newState) {
             if (closed) return;
             if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
-                listener.onRadioState(true, "BLE connected; discovering PhoneAPI");
-                current.discoverServices();
+                listener.onRadioState(true, "BLE GATT connected; discovering Meshtastic service");
+                if (!current.discoverServices()) {
+                    listener.onRadioState(false, "Android rejected BLE service discovery");
+                    current.disconnect();
+                }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 listener.onRadioState(false, "BLE disconnected (status " + status + ")");
                 reset(current);
@@ -103,14 +109,20 @@ final class BlePhoneApiTransport implements RadioTransport {
                 current.disconnect();
                 return;
             }
-            if (!current.requestMtu(512)) configureProfile(current);
+            listener.onRadioState(true, "Meshtastic BLE service found; negotiating MTU");
+            profileConfigured = false;
+            if (!current.requestMtu(512)) configureProfile(current, "MTU request rejected; using current MTU");
+            else main.postDelayed(() -> configureProfile(current, "MTU callback timeout; using negotiated/default MTU"), 2_000);
         }
 
         @Override public void onMtuChanged(BluetoothGatt current, int mtu, int status) {
-            configureProfile(current);
+            configureProfile(current, "BLE MTU " + mtu + " (status " + status + ")");
         }
 
-        private void configureProfile(BluetoothGatt current) {
+        private void configureProfile(BluetoothGatt current, String mtuDetail) {
+            if (profileConfigured || current != gatt) return;
+            profileConfigured = true;
+            listener.onRadioState(true, mtuDetail + "; enabling FromNum notifications");
             BluetoothGattService service = current.getService(SERVICE);
             BluetoothGattCharacteristic fromNum = service == null ? null : service.getCharacteristic(FROM_NUM);
             toRadio = service == null ? null : service.getCharacteristic(TO_RADIO);
@@ -120,7 +132,11 @@ final class BlePhoneApiTransport implements RadioTransport {
                 current.disconnect();
                 return;
             }
-            current.setCharacteristicNotification(fromNum, true);
+            if (!current.setCharacteristicNotification(fromNum, true)) {
+                listener.onRadioState(false, "Android rejected local FromNum notification setup");
+                current.disconnect();
+                return;
+            }
             BluetoothGattDescriptor descriptor = fromNum.getDescriptor(CCCD);
             if (descriptor == null) {
                 listener.onRadioState(false, "Meshtastic FromNum notification descriptor is missing");
@@ -128,7 +144,10 @@ final class BlePhoneApiTransport implements RadioTransport {
                 return;
             }
             descriptor.setValue(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE);
-            current.writeDescriptor(descriptor);
+            if (!current.writeDescriptor(descriptor)) {
+                listener.onRadioState(false, "Android rejected the FromNum CCCD write");
+                current.disconnect();
+            }
         }
 
         @Override public void onDescriptorWrite(BluetoothGatt current, BluetoothGattDescriptor descriptor, int status) {
@@ -141,8 +160,16 @@ final class BlePhoneApiTransport implements RadioTransport {
             listener.onRadioState(true, "BLE PhoneAPI ready; reading node identity");
             enqueue(ProtoCodec.heartbeat(heartbeat.incrementAndGet()));
             main.postDelayed(() -> enqueue(ProtoCodec.wantConfig(CONFIG_NONCE)), 200);
-            drainFromRadio();
+            main.postDelayed(this::drainAfterSubscription, 500);
+            main.postDelayed(() -> {
+                if (!closed && localNode == 0 && current == gatt) {
+                    listener.onRadioState(false, "BLE handshake timeout: no MyNodeInfo after 20 seconds; reconnecting");
+                    current.disconnect();
+                }
+            }, 20_000);
         }
+
+        private void drainAfterSubscription() { drainFromRadio(); }
 
         @Override public void onCharacteristicChanged(BluetoothGatt current, BluetoothGattCharacteristic characteristic) {
             if (FROM_NUM.equals(characteristic.getUuid())) drainFromRadio();
@@ -168,9 +195,17 @@ final class BlePhoneApiTransport implements RadioTransport {
         }
 
         private void finishRead(int status, byte[] value) {
-            if (value != null && value.length > 0) {
+            if (status == BluetoothGatt.GATT_SUCCESS && value != null && value.length > 0) {
+                fromRadioCount++;
                 handleFromRadio(value);
-                drainFromRadio();
+                boolean pendingWrite;
+                synchronized (writes) {
+                    pendingWrite = !writes.isEmpty();
+                    if (pendingWrite) writeNextLocked();
+                }
+                if (!pendingWrite) drainFromRadio();
+            } else {
+                synchronized (writes) { writeNextLocked(); }
             }
         }
 
@@ -180,7 +215,8 @@ final class BlePhoneApiTransport implements RadioTransport {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     listener.onRadioState(false, "BLE PhoneAPI write failed: " + status);
                 }
-                writeNextLocked();
+                if (writes.isEmpty()) main.postDelayed(BlePhoneApiTransport.this::drainFromRadio, 75);
+                else writeNextLocked();
             }
         }
     };
@@ -191,6 +227,12 @@ final class BlePhoneApiTransport implements RadioTransport {
             if (message.myNodeNumber != null) {
                 localNode = message.myNodeNumber;
                 listener.onLocalNode(localNode);
+                listener.onRadioState(true, "BLE received MyNodeInfo as " + NodeId.format(localNode)
+                        + " after " + fromRadioCount + " FromRadio frames");
+            }
+            if (message.configOkToMqtt != null) {
+                mqttUplinkPermitted = message.configOkToMqtt;
+                listener.onRadioState(true, "Radio MQTT uplink permission: " + mqttUplinkPermitted);
             }
             if (message.configCompleteId != null
                     && message.configCompleteId == CONFIG_NONCE
@@ -199,7 +241,8 @@ final class BlePhoneApiTransport implements RadioTransport {
                 enqueue(ProtoCodec.wantConfig(NODE_INFO_NONCE));
                 listener.onRadioState(true, "BLE config loaded; reading node database");
             } else if (message.configCompleteId != null && message.configCompleteId == NODE_INFO_NONCE) {
-                listener.onRadioState(true, "BLE PhoneAPI handshake complete as " + NodeId.format(localNode));
+                listener.onRadioState(true, "BLE PhoneAPI handshake complete as " + NodeId.format(localNode)
+                        + "; MQTT uplink permission: " + mqttUplinkPermitted);
             }
             if (message.packet != null && message.packet.port == ProtoCodec.RETICULUM_PORT) listener.onPacket(message.packet);
         } catch (IllegalArgumentException ignored) {}
@@ -208,9 +251,14 @@ final class BlePhoneApiTransport implements RadioTransport {
     private void drainFromRadio() {
         BluetoothGatt current = gatt;
         BluetoothGattCharacteristic characteristic = fromRadio;
-        if (closed || current == null || characteristic == null || readBusy) return;
-        readBusy = true;
-        if (!current.readCharacteristic(characteristic)) readBusy = false;
+        synchronized (writes) {
+            if (closed || current == null || characteristic == null || readBusy || writeBusy || !writes.isEmpty()) return;
+            readBusy = true;
+            if (!current.readCharacteristic(characteristic)) {
+                readBusy = false;
+                listener.onRadioState(false, "Android rejected a FromRadio read; will retry on the next wake signal");
+            }
+        }
     }
 
     private void enqueue(byte[] protobuf) {
@@ -223,7 +271,7 @@ final class BlePhoneApiTransport implements RadioTransport {
 
     private void writeNextLocked() {
         BluetoothGatt current = gatt;
-        if (writeBusy || current == null || toRadio == null || writes.isEmpty()) return;
+        if (writeBusy || readBusy || current == null || toRadio == null || writes.isEmpty()) return;
         byte[] value = writes.remove();
         toRadio.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
         toRadio.setValue(value);
@@ -236,8 +284,11 @@ final class BlePhoneApiTransport implements RadioTransport {
         int id = packetId.updateAndGet(previous -> previous == -1 ? 1 : previous + 1);
         enqueue(ProtoCodec.toRadioPacket(
                 localNode, destination, id, config.channel, config.hops,
-                config.wantAck && destination != NodeId.BROADCAST, payload));
+                config.wantAck && destination != NodeId.BROADCAST,
+                mqttUplinkPermitted, payload));
     }
+
+    @Override public boolean isReady() { return localNode != 0; }
 
     private void reset(BluetoothGatt current) {
         try { current.close(); } catch (Exception ignored) {}
@@ -245,7 +296,10 @@ final class BlePhoneApiTransport implements RadioTransport {
         toRadio = null;
         fromRadio = null;
         localNode = 0;
+        mqttUplinkPermitted = false;
         nodeInfoRequested = false;
+        profileConfigured = false;
+        fromRadioCount = 0;
         readBusy = false;
         synchronized (writes) {
             writeBusy = false;

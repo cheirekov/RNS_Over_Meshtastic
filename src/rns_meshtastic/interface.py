@@ -56,7 +56,11 @@ class _QueuedTransmission:
 class RNSMeshtasticInterface(Interface):
     """RNS interface using native Meshtastic PhoneAPI or binary MQTT."""
 
-    DEFAULT_IFAC_SIZE = 8
+    # Reticulum stores this value in bytes. Sideband uses a fixed 16-byte
+    # (128-bit) IFAC for its TCP interface whenever an IFAC name or passphrase
+    # is configured. Matching that standard default is required because an
+    # otherwise identical IFAC key with a different on-wire size is rejected.
+    DEFAULT_IFAC_SIZE = 16
     HW_MTU = 564
 
     def __init__(self, owner: Any, configuration: Any) -> None:
@@ -165,6 +169,12 @@ class RNSMeshtasticInterface(Interface):
 
     def final_init(self) -> None:
         self._finalized = True
+        if getattr(self, "ifac_key", None) is not None:
+            network = getattr(self, "ifac_netname", None)
+            RNS.log(
+                f"{self}: Reticulum IFAC enabled ({self.ifac_size * 8}-bit, network {network!r})",
+                RNS.LOG_NOTICE,
+            )
         if self.mesh_mode == "gateway_unicast" and self.gateway_role == "hub":
             self.OUT = False
             self.IN = True

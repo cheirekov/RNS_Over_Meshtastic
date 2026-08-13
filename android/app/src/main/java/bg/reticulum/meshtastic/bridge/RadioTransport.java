@@ -8,6 +8,7 @@ interface RadioTransport extends AutoCloseable {
     }
 
     void start(Listener listener);
+    boolean isReady();
     void send(byte[] payload, long destination) throws Exception;
     @Override void close();
 }

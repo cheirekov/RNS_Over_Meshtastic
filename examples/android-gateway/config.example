@@ -32,6 +32,8 @@
     pki_required = No
 
     # These two values MUST exactly match Phone A's Sideband TCP IFAC fields.
+    # Reticulum config expresses ifac_size in bits; Sideband TCP uses 128 bits.
+    ifac_size = 128
     network_name = CHANGE-ME-phone-lora-ifac
     passphrase = CHANGE-ME-long-random-phone-lora-passphrase
 
@@ -43,5 +45,6 @@
     listen_port = 4242
 
     # These two values are for Phone B; do not reuse the LoRa-side values.
+    ifac_size = 128
     network_name = CHANGE-ME-lan-ifac
     passphrase = CHANGE-ME-long-random-lan-passphrase

@@ -33,7 +33,17 @@ public final class BridgeService extends Service {
         }
         startForeground(NOTIFICATION_ID, notification(getString(R.string.service_running)));
         if (engine == null) startBridge();
+        else restartBridge();
         return START_STICKY;
+    }
+
+    private void restartBridge() {
+        BridgeEngine current = engine;
+        engine = null;
+        if (current != null) current.close();
+        releaseWakeLock();
+        publishStatus("Applying new configuration…");
+        startBridge();
     }
 
     private void startBridge() {
@@ -78,8 +88,7 @@ public final class BridgeService extends Service {
         BridgeEngine current = engine;
         engine = null;
         if (current != null) current.close();
-        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        wakeLock = null;
+        releaseWakeLock();
         publishStopped();
         super.onDestroy();
     }
@@ -89,6 +98,11 @@ public final class BridgeService extends Service {
     }
 
     @Override public IBinder onBind(Intent intent) { return null; }
+
+    private void releaseWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        wakeLock = null;
+    }
 
     private static String useful(Exception error) {
         return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();

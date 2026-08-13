@@ -27,6 +27,8 @@
     gateway_role = client
 
     # Reticulum IFAC. Replace both values on every real installation.
+    # Sideband TCP uses a 128-bit IFAC when these fields are configured.
+    ifac_size = 128
     network_name = CHANGE-ME-rns-meshtastic
     passphrase = CHANGE-ME-long-random-passphrase
 
@@ -38,6 +40,6 @@
     listen_port = 4242
 
     # Keep port 4242 behind a host firewall and LAN/VPN.
+    ifac_size = 128
     network_name = CHANGE-ME-rns-tcp
     passphrase = CHANGE-ME-another-long-random-passphrase
-

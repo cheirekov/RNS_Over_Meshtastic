@@ -31,6 +31,8 @@
     mqtt_qos = 1
     tx_interval = 0
 
+    # Reticulum config expresses this value in bits.
+    ifac_size = 128
     network_name = CHANGE-ME-rns-meshtastic
     passphrase = CHANGE-ME-long-random-passphrase
 
@@ -40,5 +42,6 @@
     mode = gateway
     listen_ip = 0.0.0.0
     listen_port = 4242
+    ifac_size = 128
     network_name = CHANGE-ME-rns-tcp
     passphrase = CHANGE-ME-another-long-random-passphrase

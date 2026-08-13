@@ -7,6 +7,9 @@ import java.util.Arrays;
 final class ProtoCodec {
     static final int RETICULUM_PORT = 76;
     static final int PRIORITY_RELIABLE = 70;
+    // Data.bitfield bit 0 explicitly carries the radio owner's MQTT-uplink
+    // policy. Mirror config_ok_to_mqtt instead of granting it unconditionally.
+    static final int OK_TO_MQTT = 1;
 
     static final class RadioPacket {
         final long source;
@@ -14,13 +17,15 @@ final class ProtoCodec {
         final int channel;
         final int port;
         final byte[] payload;
+        final boolean pkiEncrypted;
 
-        RadioPacket(long source, long destination, int channel, int port, byte[] payload) {
+        RadioPacket(long source, long destination, int channel, int port, byte[] payload, boolean pkiEncrypted) {
             this.source = source;
             this.destination = destination;
             this.channel = channel;
             this.port = port;
             this.payload = payload;
+            this.pkiEncrypted = pkiEncrypted;
         }
     }
 
@@ -28,11 +33,13 @@ final class ProtoCodec {
         final RadioPacket packet;
         final Long myNodeNumber;
         final Long configCompleteId;
+        final Boolean configOkToMqtt;
 
-        FromRadio(RadioPacket packet, Long myNodeNumber, Long configCompleteId) {
+        FromRadio(RadioPacket packet, Long myNodeNumber, Long configCompleteId, Boolean configOkToMqtt) {
             this.packet = packet;
             this.myNodeNumber = myNodeNumber;
             this.configCompleteId = configCompleteId;
+            this.configOkToMqtt = configOkToMqtt;
         }
     }
 
@@ -57,10 +64,12 @@ final class ProtoCodec {
             int channel,
             int hops,
             boolean wantAck,
+            boolean okToMqtt,
             byte[] payload) {
         Writer data = new Writer();
         data.varintField(1, RETICULUM_PORT);
         data.bytesField(2, payload);
+        if (okToMqtt) data.varintField(9, OK_TO_MQTT);
 
         Writer packet = new Writer();
         packet.fixed32Field(1, source);
@@ -83,16 +92,40 @@ final class ProtoCodec {
         RadioPacket packet = null;
         Long myNode = null;
         Long configComplete = null;
+        Boolean configOkToMqtt = null;
         while (in.hasRemaining()) {
             int tag = in.readTag();
             int field = tag >>> 3;
             int wire = tag & 7;
             if (field == 2 && wire == 2) packet = parseMeshPacket(in.readBytes());
             else if (field == 3 && wire == 2) myNode = parseMyNodeInfo(in.readBytes());
+            else if (field == 5 && wire == 2) configOkToMqtt = parseConfigOkToMqtt(in.readBytes());
             else if (field == 7 && wire == 0) configComplete = in.readVarint() & 0xffffffffL;
             else in.skip(wire);
         }
-        return new FromRadio(packet, myNode, configComplete);
+        return new FromRadio(packet, myNode, configComplete, configOkToMqtt);
+    }
+
+    private static Boolean parseConfigOkToMqtt(byte[] encoded) {
+        Reader config = new Reader(encoded);
+        while (config.hasRemaining()) {
+            int tag = config.readTag();
+            int field = tag >>> 3;
+            int wire = tag & 7;
+            if (field == 6 && wire == 2) {
+                Reader lora = new Reader(config.readBytes());
+                while (lora.hasRemaining()) {
+                    int loraTag = lora.readTag();
+                    int loraField = loraTag >>> 3;
+                    int loraWire = loraTag & 7;
+                    if (loraField == 105 && loraWire == 0) return lora.readVarint() != 0;
+                    lora.skip(loraWire);
+                }
+                return false;
+            }
+            config.skip(wire);
+        }
+        return null;
     }
 
     private static Long parseMyNodeInfo(byte[] encoded) {
@@ -112,6 +145,7 @@ final class ProtoCodec {
         int channel = 0;
         int port = 0;
         byte[] payload = null;
+        boolean pkiEncrypted = false;
         while (in.hasRemaining()) {
             int tag = in.readTag();
             int field = tag >>> 3;
@@ -123,10 +157,11 @@ final class ProtoCodec {
                 Data decoded = parseData(in.readBytes());
                 port = decoded.port;
                 payload = decoded.payload;
-            } else in.skip(wire);
+            } else if (field == 17 && wire == 0) pkiEncrypted = in.readVarint() != 0;
+            else in.skip(wire);
         }
         if (payload == null) return null;
-        return new RadioPacket(source, destination, channel, port, payload);
+        return new RadioPacket(source, destination, channel, port, payload, pkiEncrypted);
     }
 
     private static Data parseData(byte[] encoded) {
