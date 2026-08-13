@@ -29,14 +29,17 @@ FragmentProtocol (port 76)
 - Reticulum performs its own packet deduplication after reassembly.
 - MQTT messages are never retained.
 
-## Deliberate limitations of the MVP
+## Current design boundaries
 
 - MQTT JSON is unsupported because port 76 is binary and is not one of the JSON
   downlink message types.
 - The simple MQTT virtual node does not own a Meshtastic PKI private key. MQTT
   downlink is therefore channel-encrypted by the physical gateway. A future
   Portduino-backed virtual node can provide a full Meshtastic identity.
-- The Android foreground-service bridge is a separate next stage. It will reuse
-  the same fragmentation format and gateway-unicast semantics after the Linux
-  and RF transports pass the documented tests.
-
+- The Android foreground-service bridge is implemented and uses the same port
+  76 fragmentation and gateway-unicast semantics. Its Reticulum-facing link is
+  loopback TCP, so clients see the local TCP bitrate while the bridge enforces
+  the actual radio constraint with pacing, bounded queues and PhoneAPI flow
+  control.
+- Persistent store-and-forward belongs at the LXMF propagation layer. The
+  transport does not persist and replay arbitrary opaque Reticulum frames.
