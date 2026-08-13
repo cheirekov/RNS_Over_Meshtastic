@@ -6,7 +6,9 @@ services:
     volumes:
       - .:/workspace/android
       - gradle-cache:/home/gradle/.gradle
+      - android-debug-signing:/home/gradle/.android
     command: ["gradle", "--no-daemon", "testDebugUnitTest", "assembleDebug"]
 
 volumes:
   gradle-cache:
+  android-debug-signing:

@@ -18,6 +18,18 @@ from rns_meshtastic.addresses import BROADCAST_ID, format_node_id, parse_node_id
 from rns_meshtastic.framing import FragmentProtocol
 
 
+def _psk_profile(value: bytes) -> str:
+    """Describe a channel key without printing reusable key material."""
+    key = bytes(value)
+    if not key:
+        return "none"
+    if key == b"\x01":
+        return "default (canonical Base64 AQ==)"
+    if len(key) in {16, 32}:
+        return f"private-{len(key)}"
+    return f"nonstandard-{len(key)}"
+
+
 def _install_interface(args: argparse.Namespace) -> int:
     target_dir = Path(args.config_dir).expanduser().resolve() / "interfaces"
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -108,6 +120,7 @@ def _radio_info(args: argparse.Namespace) -> int:
             print(
                 f"  index={channel.index} role={role_name} ({channel.role}) "
                 f"name={settings.name!r} "
+                f"psk_profile={_psk_profile(settings.psk)!r} "
                 f"uplink={settings.uplink_enabled} downlink={settings.downlink_enabled}"
             )
         module_config = getattr(local, "moduleConfig", None)

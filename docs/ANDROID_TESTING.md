@@ -72,6 +72,12 @@ uv run rnsd --config ./var/android-gateway -vv
 
 ## 3. Phone A: Android bridge
 
+APK 0.1.7 е първата container build версия със запазван debug signing key.
+Ако Android откаже update от по-ранна APK с `App not installed`/signature
+conflict, запишете текущите полета, uninstall-нете старата APK и инсталирайте
+0.1.7. Следващите build-ове могат да се инсталират с update, докато Docker
+volume-ът `android-debug-signing` не бъде изтрит.
+
 За първия реален тест използвайте T-LoRa Pager `!a1b3b3b8` през BLE:
 
 1. Disconnect-нете pager-а от официалното Meshtastic приложение. Не е нужно да
@@ -90,7 +96,7 @@ Hop limit = 3
 Radio addressing mode = gateway_unicast
 Linux gateway Node ID = !8fd13c64
 Fragment payload bytes = 200
-Delay between fragments = 2000 ms
+Global delay between Meshtastic transmissions = 2000 ms
 Request ACK = off
 ```
 
@@ -133,6 +139,14 @@ auto-PKI DM носи изрично намерението на собствен
 има активна broker сесия. След включване или рестарт изчакайте MQTT reconnect;
 при disconnect firmware queue-ва пакетите. Липсата на `mesh→RNS` не трябва да
 се диагностицира само по Android броячите.
+
+Версия 0.1.7 прилага зададения delay глобално между всички Meshtastic
+предавания, включително между два отделни едноfragmentни Reticulum frame-а.
+Status-ът показва `radio queue` във frames/fragment-и/байтове, приблизителен
+`drain`, `device TX queue`, брояч `backpressure` и `dropped`. PhoneAPI
+`queue_status` спира подаването, когато firmware TX опашката е пълна. Показаните
+от Sideband/Columba `10 Mbps` остават оценка на локалния TCP endpoint, а не на
+LoRa сегмента.
 
 За недвусмислен BLE тест след появата на `BLE PhoneAPI handshake complete as
 !a1b3b3b8` изключете Wi-Fi и mobile data само на Phone A. Loopback
@@ -231,6 +245,33 @@ allowed_nodes = !a1b3b3b8
 Broadcast fallback се тества чрез `Radio addressing mode = broadcast` на
 Android и `mesh_mode = broadcast`, `gateway_role = client` на Linux интерфейса.
 Не смесвайте единия край в broadcast, а другия в gateway-unicast.
+
+За директен тест с два Android телефона, две Meshtastic радиа и без Linux
+gateway използвайте [DIRECT_ANDROID_BROADCAST.md](DIRECT_ANDROID_BROADCAST.md).
+Android 0.1.7 включва опционалния allowlist, bounded radio queue, глобален
+pacing и видими drain/backpressure/dropped counters.
+
+### 0.1.7 queue и power regression
+
+След краткия двупосочен LXMF тест:
+
+1. Уверете се, че `radio queue` се връща до `0 frames, 0 fragments, 0 bytes`,
+   `dropped: 0` и няма нов `last error`.
+2. Изпратете последователно 10 кратки текста. `radio queue` може временно да
+   расте, а `backpressure` може да се увеличи — това е нормално ограничаване на
+   бързия loopback TCP producer. `dropped` трябва да остане `0`.
+3. Изчакайте пълно изпразване и изпратете едно изображение 1–4 KiB. Не
+   изпращайте втори файл, докато `radio queue` не стане нула.
+4. Следете `device TX queue: FREE/MAX free`. Стойност `0/MAX` може да се появи
+   временно; scheduler-ът трябва да продължи, когато firmware докладва свободен
+   slot, без `full for 45 seconds` error.
+5. Изгасете екрана за 60 минути и повторете кратко съобщение на 10, 30 и 60
+   минути. Notification трябва да остане, BLE/TCP да не се reconnect-ва
+   циклично, а battery drain да се запише за сравнение.
+
+Не използвайте live telephone/PTT като capacity тест. Най-ниският аудио codec
+профил и двупосочният overhead надвишават практичния капацитет на този shared
+LoRa сегмент.
 
 ## След успешния първи тест
 

@@ -16,6 +16,7 @@ public class ProtoCodecTest {
         assertArrayEquals(hex("0a200d643cd18f15ffffffff2209084c120361626348013578563412480358467803"), encoded);
         assertArrayEquals(hex("18ac9e04"), ProtoCodec.wantConfig(69420));
         assertArrayEquals(hex("18ad9e04"), ProtoCodec.wantConfig(69421));
+        assertArrayEquals(hex("3a020802"), ProtoCodec.heartbeat(2));
     }
 
     @Test public void omitsMqttPermissionWhenRadioPolicyDisallowsIt() {
@@ -57,6 +58,15 @@ public class ProtoCodecTest {
         assertEquals(0, message.packet.channel);
         assertTrue(BridgeEngine.acceptsInbound(message.packet, 1, 0xa1b3b3b8L));
         assertFalse(BridgeEngine.acceptsInbound(message.packet, 1, 0x01020304L));
+    }
+
+    @Test public void decodesDeviceTransmitQueueStatus() {
+        ProtoCodec.FromRadio message = ProtoCodec.parseFromRadio(hex("5a0a100f181020eefb96da05"));
+        assertNotNull(message.queueStatus);
+        assertEquals(15, message.queueStatus.free);
+        assertEquals(16, message.queueStatus.maxLength);
+        assertEquals(0x5b45bdeeL, message.queueStatus.meshPacketId);
+        assertEquals(0, message.queueStatus.result);
     }
 
     @Test public void keepsChannelFilterForNonPkiPackets() {

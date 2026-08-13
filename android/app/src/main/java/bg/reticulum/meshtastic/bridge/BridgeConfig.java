@@ -3,6 +3,10 @@ package bg.reticulum.meshtastic.bridge;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
+
 final class BridgeConfig {
     static final String PREFS = "bridge";
     final String transport;
@@ -14,6 +18,8 @@ final class BridgeConfig {
     final int hops;
     final String mode;
     final String gateway;
+    final String allowedSources;
+    final Set<String> allowedSourceNodes;
     final int fragmentBody;
     final int txIntervalMillis;
     final boolean wantAck;
@@ -21,7 +27,7 @@ final class BridgeConfig {
     BridgeConfig(
             String transport, String radioHost, int radioPort, String bleAddress, int localPort,
             int channel, int hops, String mode, String gateway, int fragmentBody,
-            int txIntervalMillis, boolean wantAck) {
+            int txIntervalMillis, boolean wantAck, String allowedSources) {
         this.transport = transport;
         this.radioHost = radioHost;
         this.radioPort = radioPort;
@@ -31,6 +37,8 @@ final class BridgeConfig {
         this.hops = hops;
         this.mode = mode;
         this.gateway = gateway;
+        this.allowedSources = allowedSources.trim();
+        this.allowedSourceNodes = parseAllowedSources(this.allowedSources);
         this.fragmentBody = fragmentBody;
         this.txIntervalMillis = txIntervalMillis;
         this.wantAck = wantAck;
@@ -51,7 +59,8 @@ final class BridgeConfig {
                 p.getString("gateway", "!8fd13c64"),
                 p.getInt("fragment_body", 200),
                 p.getInt("tx_interval_ms", 2000),
-                p.getBoolean("want_ack", false));
+                p.getBoolean("want_ack", false),
+                p.getString("allowed_sources", ""));
     }
 
     void save(Context context) {
@@ -65,6 +74,7 @@ final class BridgeConfig {
                 .putInt("hops", hops)
                 .putString("mode", mode)
                 .putString("gateway", gateway)
+                .putString("allowed_sources", allowedSources)
                 .putInt("fragment_body", fragmentBody)
                 .putInt("tx_interval_ms", txIntervalMillis)
                 .putBoolean("want_ack", wantAck)
@@ -74,7 +84,18 @@ final class BridgeConfig {
     String outboundDestination() { return mode.equals("broadcast") ? "^all" : gateway; }
 
     boolean acceptsSource(String source) {
-        return mode.equals("broadcast") || source.equalsIgnoreCase(gateway);
+        if (!mode.equals("broadcast")) return source.equalsIgnoreCase(gateway);
+        return allowedSourceNodes.isEmpty() || allowedSourceNodes.contains(NodeId.format(NodeId.parse(source)));
+    }
+
+    private static Set<String> parseAllowedSources(String value) {
+        if (value.isBlank()) return Collections.emptySet();
+        Set<String> result = new LinkedHashSet<>();
+        for (String item : value.split(",")) {
+            String candidate = item.trim();
+            if (!candidate.isEmpty()) result.add(NodeId.format(NodeId.parse(candidate)));
+        }
+        return Collections.unmodifiableSet(result);
     }
 
     private void validate() {

@@ -2,4 +2,5 @@
     <string name="app_name">RNS Meshtastic Bridge</string>
     <string name="service_channel">Reticulum bridge</string>
     <string name="service_running">Reticulum ↔ Meshtastic bridge is running</string>
+    <string name="service_description">Maintains the user-started Reticulum connection to a Meshtastic radio.</string>
 </resources>

@@ -1,4 +1,12 @@
-from rns_meshtastic.cli import build_parser
+from rns_meshtastic.cli import _psk_profile, build_parser
+
+
+def test_psk_profile_never_returns_key_material():
+    assert _psk_profile(b"") == "none"
+    assert _psk_profile(b"\x01") == "default (canonical Base64 AQ==)"
+    assert _psk_profile(bytes(range(16))) == "private-16"
+    assert _psk_profile(bytes(range(32))) == "private-32"
+    assert _psk_profile(b"\x01\x0f\xbe") == "nonstandard-3"
 
 
 def test_mqtt_radio_probe_rejects_broadcast_destination():

@@ -34,14 +34,19 @@ final class BlePhoneApiTransport implements RadioTransport {
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private static final int CONFIG_NONCE = 69420;
     private static final int NODE_INFO_NONCE = 69421;
+    private static final int MAX_PENDING_WRITES = 64;
 
     private final Context context;
     private final BridgeConfig config;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final AtomicInteger packetId = new AtomicInteger(new SecureRandom().nextInt());
-    private final AtomicInteger heartbeat = new AtomicInteger();
+    // Nonce 1 is a firmware sentinel that forces a NodeInfo LoRa broadcast.
+    private final AtomicInteger heartbeat = new AtomicInteger(1);
     private final Queue<byte[]> writes = new ArrayDeque<>();
+    private final DeviceQueueFlowControl deviceQueue = new DeviceQueueFlowControl();
+    private final ReconnectBackoff reconnectBackoff = new ReconnectBackoff(5_000, 60_000);
+    private final Runnable reconnect = this::connect;
     private volatile boolean closed;
     private volatile long localNode;
     private volatile boolean mqttUplinkPermitted;
@@ -63,13 +68,13 @@ final class BlePhoneApiTransport implements RadioTransport {
     @Override public void start(Listener listener) {
         this.listener = listener;
         main.post(this::connect);
-        scheduler.scheduleAtFixedRate(
-                () -> enqueue(ProtoCodec.heartbeat(heartbeat.incrementAndGet())),
-                20, 20, TimeUnit.SECONDS);
+        scheduler.scheduleWithFixedDelay(this::sendHeartbeat, 30, 30, TimeUnit.SECONDS);
     }
 
     private void connect() {
         if (closed) return;
+        main.removeCallbacks(reconnect);
+        if (gatt != null) return;
         BluetoothManager manager = context.getSystemService(BluetoothManager.class);
         BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
         if (adapter == null || !adapter.isEnabled()) {
@@ -98,6 +103,10 @@ final class BlePhoneApiTransport implements RadioTransport {
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 listener.onRadioState(false, "BLE disconnected (status " + status + ")");
+                reset(current);
+                retry();
+            } else if (status != BluetoothGatt.GATT_SUCCESS) {
+                listener.onRadioState(false, "BLE connection failed (status " + status + ")");
                 reset(current);
                 retry();
             }
@@ -215,7 +224,7 @@ final class BlePhoneApiTransport implements RadioTransport {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     listener.onRadioState(false, "BLE PhoneAPI write failed: " + status);
                 }
-                if (writes.isEmpty()) main.postDelayed(BlePhoneApiTransport.this::drainFromRadio, 75);
+                if (writes.isEmpty()) main.postDelayed(BlePhoneApiTransport.this::drainFromRadio, 200);
                 else writeNextLocked();
             }
         }
@@ -226,6 +235,7 @@ final class BlePhoneApiTransport implements RadioTransport {
             ProtoCodec.FromRadio message = ProtoCodec.parseFromRadio(protobuf);
             if (message.myNodeNumber != null) {
                 localNode = message.myNodeNumber;
+                reconnectBackoff.reset();
                 listener.onLocalNode(localNode);
                 listener.onRadioState(true, "BLE received MyNodeInfo as " + NodeId.format(localNode)
                         + " after " + fromRadioCount + " FromRadio frames");
@@ -233,6 +243,11 @@ final class BlePhoneApiTransport implements RadioTransport {
             if (message.configOkToMqtt != null) {
                 mqttUplinkPermitted = message.configOkToMqtt;
                 listener.onRadioState(true, "Radio MQTT uplink permission: " + mqttUplinkPermitted);
+            }
+            if (message.queueStatus != null) {
+                deviceQueue.update(message.queueStatus);
+                listener.onQueueStatus(
+                        message.queueStatus.free, message.queueStatus.maxLength, message.queueStatus.result);
             }
             if (message.configCompleteId != null
                     && message.configCompleteId == CONFIG_NONCE
@@ -261,12 +276,19 @@ final class BlePhoneApiTransport implements RadioTransport {
         }
     }
 
-    private void enqueue(byte[] protobuf) {
-        if (closed) return;
+    private boolean enqueue(byte[] protobuf) {
+        if (closed) return false;
         synchronized (writes) {
+            if (writes.size() >= MAX_PENDING_WRITES) return false;
             writes.add(protobuf);
             writeNextLocked();
+            return true;
         }
+    }
+
+    private void sendHeartbeat() {
+        if (closed || gatt == null || toRadio == null) return;
+        enqueue(ProtoCodec.heartbeat(heartbeat.incrementAndGet()));
     }
 
     private void writeNextLocked() {
@@ -279,13 +301,18 @@ final class BlePhoneApiTransport implements RadioTransport {
         if (!writeBusy) listener.onRadioState(false, "BLE stack rejected a PhoneAPI write");
     }
 
-    @Override public void send(byte[] payload, long destination) {
+    @Override public void send(byte[] payload, long destination) throws Exception {
         if (localNode == 0) throw new IllegalStateException("radio identity is not available yet");
         int id = packetId.updateAndGet(previous -> previous == -1 ? 1 : previous + 1);
-        enqueue(ProtoCodec.toRadioPacket(
+        byte[] message = ProtoCodec.toRadioPacket(
                 localNode, destination, id, config.channel, config.hops,
                 config.wantAck && destination != NodeId.BROADCAST,
-                mqttUplinkPermitted, payload));
+                mqttUplinkPermitted, payload);
+        if (!deviceQueue.acquire(45_000)) throw new IllegalStateException("Meshtastic device TX queue unavailable or full for 45 seconds");
+        if (!enqueue(message)) {
+            deviceQueue.releaseAfterLocalFailure();
+            throw new IllegalStateException("BLE PhoneAPI queue is full");
+        }
     }
 
     @Override public boolean isReady() { return localNode != 0; }
@@ -301,16 +328,24 @@ final class BlePhoneApiTransport implements RadioTransport {
         profileConfigured = false;
         fromRadioCount = 0;
         readBusy = false;
+        deviceQueue.reset();
         synchronized (writes) {
             writeBusy = false;
             writes.clear();
         }
     }
 
-    private void retry() { if (!closed) main.postDelayed(this::connect, 5_000); }
+    private void retry() {
+        if (closed) return;
+        main.removeCallbacks(reconnect);
+        long delay = reconnectBackoff.nextDelayMillis();
+        listener.onRadioState(false, "BLE reconnect scheduled in " + (delay / 1_000) + " seconds");
+        main.postDelayed(reconnect, delay);
+    }
 
     @Override public void close() {
         closed = true;
+        deviceQueue.close();
         scheduler.shutdownNow();
         main.removeCallbacksAndMessages(null);
         BluetoothGatt current = gatt;

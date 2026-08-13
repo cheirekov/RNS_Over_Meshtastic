@@ -116,7 +116,10 @@ final class FragmentProtocol {
         if (!result.transmissions.isEmpty()) return result;
 
         ByteArrayOutputStream frame = new ByteArrayOutputStream();
-        for (int p = 1; p <= assembly.last; p++) frame.writeBytes(assembly.fragments.get(p));
+        for (int p = 1; p <= assembly.last; p++) {
+            byte[] fragment = assembly.fragments.get(p);
+            frame.write(fragment, 0, fragment.length);
+        }
         byte[] complete = frame.toByteArray();
         String completeKey = key + ":" + digest(complete);
         assemblies.remove(key);

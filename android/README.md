@@ -24,6 +24,11 @@ The APK is written to:
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
+Compose keeps Gradle's debug signing keystore in the
+`android-debug-signing` Docker volume. Keep that volume to install later debug
+builds as upgrades. Removing the volume changes the signing identity and then
+Android requires the previously installed debug app to be uninstalled first.
+
 Install it with an existing `adb`, or copy the APK to the phone and approve
 installation from that source. The Docker image pins Gradle/AGP, Android API
 35, build-tools 35.0.0, and verifies the official Android command-line-tools
@@ -37,8 +42,10 @@ archive by SHA-256.
   Meshtastic app first; a BLE peripheral cannot serve both apps at once.
 
 The app requests only the runtime permissions required by the selected
-transport. It runs as a foreground `connectedDevice` service and holds a
-partial wake lock while active.
+transport. It runs as a foreground `connectedDevice` service. It deliberately
+does not hold a permanent partial wake lock; Android's BLE stack and the
+foreground service keep the connection lifecycle active without forcing the
+CPU awake continuously.
 
 See `../docs/ANDROID_TESTING.md` for the complete Linux gateway, Sideband and
 hardware test sequence.

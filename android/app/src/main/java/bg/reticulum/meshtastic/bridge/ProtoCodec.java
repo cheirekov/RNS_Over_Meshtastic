@@ -34,12 +34,30 @@ final class ProtoCodec {
         final Long myNodeNumber;
         final Long configCompleteId;
         final Boolean configOkToMqtt;
+        final QueueStatus queueStatus;
 
-        FromRadio(RadioPacket packet, Long myNodeNumber, Long configCompleteId, Boolean configOkToMqtt) {
+        FromRadio(
+                RadioPacket packet, Long myNodeNumber, Long configCompleteId,
+                Boolean configOkToMqtt, QueueStatus queueStatus) {
             this.packet = packet;
             this.myNodeNumber = myNodeNumber;
             this.configCompleteId = configCompleteId;
             this.configOkToMqtt = configOkToMqtt;
+            this.queueStatus = queueStatus;
+        }
+    }
+
+    static final class QueueStatus {
+        final int result;
+        final int free;
+        final int maxLength;
+        final long meshPacketId;
+
+        QueueStatus(int result, int free, int maxLength, long meshPacketId) {
+            this.result = result;
+            this.free = free;
+            this.maxLength = maxLength;
+            this.meshPacketId = meshPacketId;
         }
     }
 
@@ -93,6 +111,7 @@ final class ProtoCodec {
         Long myNode = null;
         Long configComplete = null;
         Boolean configOkToMqtt = null;
+        QueueStatus queueStatus = null;
         while (in.hasRemaining()) {
             int tag = in.readTag();
             int field = tag >>> 3;
@@ -101,9 +120,29 @@ final class ProtoCodec {
             else if (field == 3 && wire == 2) myNode = parseMyNodeInfo(in.readBytes());
             else if (field == 5 && wire == 2) configOkToMqtt = parseConfigOkToMqtt(in.readBytes());
             else if (field == 7 && wire == 0) configComplete = in.readVarint() & 0xffffffffL;
+            else if (field == 11 && wire == 2) queueStatus = parseQueueStatus(in.readBytes());
             else in.skip(wire);
         }
-        return new FromRadio(packet, myNode, configComplete, configOkToMqtt);
+        return new FromRadio(packet, myNode, configComplete, configOkToMqtt, queueStatus);
+    }
+
+    private static QueueStatus parseQueueStatus(byte[] encoded) {
+        Reader in = new Reader(encoded);
+        int result = 0;
+        int free = 0;
+        int maxLength = 0;
+        long meshPacketId = 0;
+        while (in.hasRemaining()) {
+            int tag = in.readTag();
+            int field = tag >>> 3;
+            int wire = tag & 7;
+            if (field == 1 && wire == 0) result = (int) in.readVarint();
+            else if (field == 2 && wire == 0) free = (int) in.readVarint();
+            else if (field == 3 && wire == 0) maxLength = (int) in.readVarint();
+            else if (field == 4 && wire == 0) meshPacketId = in.readVarint() & 0xffffffffL;
+            else in.skip(wire);
+        }
+        return new QueueStatus(result, free, maxLength, meshPacketId);
     }
 
     private static Boolean parseConfigOkToMqtt(byte[] encoded) {
@@ -204,7 +243,7 @@ final class ProtoCodec {
         void bytesField(int field, byte[] value) {
             varint(((long) field << 3) | 2);
             varint(value.length);
-            out.writeBytes(value);
+            out.write(value, 0, value.length);
         }
 
         void varint(long value) {

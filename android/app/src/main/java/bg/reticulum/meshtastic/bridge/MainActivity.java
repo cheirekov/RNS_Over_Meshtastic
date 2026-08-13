@@ -1,6 +1,7 @@
 package bg.reticulum.meshtastic.bridge;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.bluetooth.BluetoothAdapter;
@@ -18,7 +19,9 @@ import android.graphics.Typeface;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelUuid;
+import android.provider.Settings;
 import android.text.InputType;
+import android.net.Uri;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -47,6 +50,7 @@ public final class MainActivity extends Activity {
     private EditText hops;
     private Spinner mode;
     private EditText gateway;
+    private EditText allowedSources;
     private EditText fragmentBody;
     private EditText txInterval;
     private CheckBox wantAck;
@@ -78,7 +82,8 @@ public final class MainActivity extends Activity {
         form.addView(title);
 
         TextView explanation = new TextView(this);
-        explanation.setText("Local Reticulum TCP server for Sideband/Columba. The server is bound only to 127.0.0.1.");
+        explanation.setText("Local Reticulum TCP server for Sideband/Columba, bound only to 127.0.0.1. "
+                + "Clients may display the local TCP estimate of 10 Mbps; actual radio traffic is paced below.");
         explanation.setPadding(0, dp(6), 0, dp(12));
         form.addView(explanation);
 
@@ -103,11 +108,13 @@ public final class MainActivity extends Activity {
         mode = spinner(new String[] {"gateway_unicast", "broadcast"});
         add(form, "Radio addressing mode", mode);
         gateway = text("!8fd13c64", false);
-        add(form, "Linux gateway Meshtastic Node ID", gateway);
+        add(form, "Gateway Meshtastic Node ID (unicast only)", gateway);
+        allowedSources = text("!aabbcc11, !11223344", false);
+        add(form, "Allowed peer Node IDs (optional, broadcast only)", allowedSources);
         fragmentBody = text("200", true);
         add(form, "Fragment payload bytes", fragmentBody);
         txInterval = text("2000", true);
-        add(form, "Delay between LoRa fragments (ms)", txInterval);
+        add(form, "Global delay between Meshtastic transmissions (ms)", txInterval);
         wantAck = new CheckBox(this);
         wantAck.setText("Request Meshtastic ACK for unicast fragments");
         form.addView(wantAck);
@@ -124,6 +131,11 @@ public final class MainActivity extends Activity {
         buttons.addView(stop, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
         form.addView(buttons);
 
+        Button backgroundSettings = new Button(this);
+        backgroundSettings.setText("Open background / battery settings");
+        backgroundSettings.setOnClickListener(ignored -> openBackgroundSettings());
+        form.addView(backgroundSettings);
+
         status = new TextView(this);
         status.setText("Bridge is not running");
         status.setTextIsSelectable(true);
@@ -133,6 +145,13 @@ public final class MainActivity extends Activity {
         transport.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 updateTransportFields();
+            }
+
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
+        mode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                updateModeFields();
             }
 
             @Override public void onNothingSelected(AdapterView<?> parent) {}
@@ -154,10 +173,13 @@ public final class MainActivity extends Activity {
         hops.setText(String.valueOf(config.hops));
         select(mode, config.mode);
         gateway.setText(config.gateway);
+        allowedSources.setText(config.allowedSources);
         fragmentBody.setText(String.valueOf(config.fragmentBody));
         txInterval.setText(String.valueOf(config.txIntervalMillis));
         wantAck.setChecked(config.wantAck);
+        status.setText(BridgeService.latestStatus(this));
         updateTransportFields();
+        updateModeFields();
     }
 
     private void saveAndStart() {
@@ -169,7 +191,7 @@ public final class MainActivity extends Activity {
                     selectedTransport.equals("tcp") ? integer(radioPort) : 4403,
                     selectedTransport.equals("ble") ? value(bleAddress) : "",
                     integer(localPort), integer(channel), integer(hops), selected(mode), value(gateway),
-                    integer(fragmentBody), integer(txInterval), wantAck.isChecked());
+                    integer(fragmentBody), integer(txInterval), wantAck.isChecked(), value(allowedSources));
             if (!ensurePermissions(config)) return;
             config.save(this);
             Intent service = new Intent(this, BridgeService.class).setAction(BridgeService.ACTION_START);
@@ -264,7 +286,14 @@ public final class MainActivity extends Activity {
         super.onStart();
         IntentFilter filter = new IntentFilter(BridgeService.ACTION_STATUS);
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(statusReceiver, filter, RECEIVER_NOT_EXPORTED);
-        else registerReceiver(statusReceiver, filter);
+        else registerStatusReceiverLegacy(filter);
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private void registerStatusReceiverLegacy(IntentFilter filter) {
+        // RECEIVER_NOT_EXPORTED does not exist before API 33. This broadcast is
+        // explicitly package-scoped by BridgeService and carries status text only.
+        registerReceiver(statusReceiver, filter);
     }
 
     @Override protected void onStop() {
@@ -311,9 +340,29 @@ public final class MainActivity extends Activity {
         bleScan.setAlpha(tcp ? 0.45f : 1.0f);
     }
 
+    private void updateModeFields() {
+        if (mode == null || gateway == null || allowedSources == null || wantAck == null) return;
+        boolean broadcast = selected(mode).equals("broadcast");
+        gateway.setEnabled(!broadcast);
+        gateway.setAlpha(broadcast ? 0.45f : 1.0f);
+        allowedSources.setEnabled(broadcast);
+        allowedSources.setAlpha(broadcast ? 1.0f : 0.45f);
+        wantAck.setEnabled(!broadcast);
+        wantAck.setAlpha(broadcast ? 0.45f : 1.0f);
+    }
+
     private static void select(Spinner spinner, String value) {
         for (int i = 0; i < spinner.getCount(); i++) {
             if (spinner.getItemAtPosition(i).toString().equals(value)) { spinner.setSelection(i); return; }
+        }
+    }
+
+    private void openBackgroundSettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.parse("package:" + getPackageName())));
+        } catch (Exception error) {
+            startActivity(new Intent(Settings.ACTION_SETTINGS));
         }
     }
 

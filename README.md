@@ -21,11 +21,19 @@ foreground-service bridge. The Android app exposes a loopback-only Reticulum
 TCP endpoint to Sideband/Columba and connects directly to Meshtastic TCP
 PhoneAPI or BLE; it does not depend on the Meshtastic Android app.
 
-Android bridge version 0.1.3 makes the active transport explicit in its
+Android bridge version 0.1.7 makes the active transport explicit in its
 status, switches to BLE when a scanned radio is selected, and applies changed
 configuration by restarting the running bridge engine. BLE GATT operations are
 serialized, handshake progress is reported by phase, and Reticulum frames that
 arrive before `MyNodeInfo` are held for up to 45 seconds instead of dropped.
+Broadcast mode has an optional Meshtastic source allowlist and a bounded,
+observable in-memory TX queue. Radio transmissions now use global pacing across
+Reticulum frame boundaries, TCP backpressure, repair-traffic reserve and the
+device's PhoneAPI `queue_status`. Status notifications are coalesced and the
+heartbeat avoids Meshtastic's reserved NodeInfo-broadcast nonce. BLE/TCP
+reconnect uses capped exponential backoff and the bridge follows Android's
+connected-device foreground-service model; see
+[docs/ANDROID_BACKGROUND.md](docs/ANDROID_BACKGROUND.md).
 
 Verified on 11 August 2026:
 
@@ -58,6 +66,11 @@ need neither a radio nor an MQTT broker.
 
 For the two-phone scenario (one phone with a Meshtastic radio, one without),
 see [docs/ANDROID_TESTING.md](docs/ANDROID_TESTING.md).
+
+For two Android phones with one Meshtastic radio each and no Linux gateway, see
+[docs/DIRECT_ANDROID_BROADCAST.md](docs/DIRECT_ANDROID_BROADCAST.md). Capacity,
+store-and-forward and multi-radio design boundaries are documented in
+[docs/CAPACITY_AND_STORE_FORWARD.md](docs/CAPACITY_AND_STORE_FORWARD.md).
 
 ## Quick start
 

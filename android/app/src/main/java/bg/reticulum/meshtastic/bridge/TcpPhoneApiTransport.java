@@ -16,8 +16,11 @@ final class TcpPhoneApiTransport implements RadioTransport {
     private static final int NODE_INFO_NONCE = 69421;
     private final BridgeConfig config;
     private final AtomicInteger packetId = new AtomicInteger(new SecureRandom().nextInt());
-    private final AtomicInteger heartbeat = new AtomicInteger();
+    // Nonce 1 is a firmware sentinel that forces a NodeInfo LoRa broadcast.
+    private final AtomicInteger heartbeat = new AtomicInteger(1);
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    private final DeviceQueueFlowControl deviceQueue = new DeviceQueueFlowControl();
+    private final ReconnectBackoff reconnectBackoff = new ReconnectBackoff(3_000, 60_000);
     private final Object writeLock = new Object();
     private volatile boolean closed;
     private volatile Socket socket;
@@ -34,7 +37,7 @@ final class TcpPhoneApiTransport implements RadioTransport {
         this.listener = listener;
         worker = new Thread(this::connectLoop, "meshtastic-tcp");
         worker.start();
-        scheduler.scheduleAtFixedRate(this::sendHeartbeat, 20, 20, TimeUnit.SECONDS);
+        scheduler.scheduleWithFixedDelay(this::sendHeartbeat, 30, 30, TimeUnit.SECONDS);
     }
 
     private void connectLoop() {
@@ -65,8 +68,13 @@ final class TcpPhoneApiTransport implements RadioTransport {
                 localNode = 0;
                 mqttUplinkPermitted = false;
                 nodeInfoRequested = false;
+                deviceQueue.reset();
             }
-            if (!closed) sleep(3_000);
+            if (!closed) {
+                long delay = reconnectBackoff.nextDelayMillis();
+                listener.onRadioState(false, "TCP reconnect scheduled in " + (delay / 1_000) + " seconds");
+                sleep(delay);
+            }
         }
     }
 
@@ -85,11 +93,17 @@ final class TcpPhoneApiTransport implements RadioTransport {
             ProtoCodec.FromRadio message = ProtoCodec.parseFromRadio(protobuf);
             if (message.myNodeNumber != null) {
                 localNode = message.myNodeNumber;
+                reconnectBackoff.reset();
                 listener.onLocalNode(localNode);
             }
             if (message.configOkToMqtt != null) {
                 mqttUplinkPermitted = message.configOkToMqtt;
                 listener.onRadioState(true, "Radio MQTT uplink permission: " + mqttUplinkPermitted);
+            }
+            if (message.queueStatus != null) {
+                deviceQueue.update(message.queueStatus);
+                listener.onQueueStatus(
+                        message.queueStatus.free, message.queueStatus.maxLength, message.queueStatus.result);
             }
             if (message.configCompleteId != null
                     && message.configCompleteId == CONFIG_NONCE
@@ -116,7 +130,13 @@ final class TcpPhoneApiTransport implements RadioTransport {
                 localNode, destination, id, config.channel, config.hops,
                 config.wantAck && destination != NodeId.BROADCAST,
                 mqttUplinkPermitted, payload);
-        synchronized (writeLock) { writePhoneApi(message); }
+        if (!deviceQueue.acquire(45_000)) throw new IllegalStateException("Meshtastic device TX queue unavailable or full for 45 seconds");
+        try {
+            synchronized (writeLock) { writePhoneApi(message); }
+        } catch (Exception error) {
+            deviceQueue.releaseAfterLocalFailure();
+            throw error;
+        }
     }
 
     @Override public boolean isReady() { return localNode != 0; }
@@ -140,6 +160,7 @@ final class TcpPhoneApiTransport implements RadioTransport {
 
     @Override public void close() {
         closed = true;
+        deviceQueue.close();
         scheduler.shutdownNow();
         Socket current = socket;
         if (current != null) try { current.close(); } catch (Exception ignored) {}

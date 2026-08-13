@@ -20,7 +20,8 @@ RUN apt-get update \
     && rm -rf /tmp/android-tools /tmp/android-tools.zip \
     && yes | sdkmanager --licenses >/dev/null \
     && sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" \
-    && chown -R gradle:gradle "${ANDROID_SDK_ROOT}"
+    && mkdir -p /home/gradle/.android \
+    && chown -R gradle:gradle "${ANDROID_SDK_ROOT}" /home/gradle/.android
 
 USER gradle
 WORKDIR /workspace/android
