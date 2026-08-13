@@ -56,8 +56,8 @@ public class ProtoCodecTest {
         assertNotNull(message.packet);
         assertTrue(message.packet.pkiEncrypted);
         assertEquals(0, message.packet.channel);
-        assertTrue(BridgeEngine.acceptsInbound(message.packet, 1, 0xa1b3b3b8L));
-        assertFalse(BridgeEngine.acceptsInbound(message.packet, 1, 0x01020304L));
+        assertTrue(BridgeEngine.acceptsInbound(message.packet, 1, 0xa1b3b3b8L, true));
+        assertFalse(BridgeEngine.acceptsInbound(message.packet, 1, 0x01020304L, true));
     }
 
     @Test public void decodesDeviceTransmitQueueStatus() {
@@ -72,8 +72,41 @@ public class ProtoCodecTest {
     @Test public void keepsChannelFilterForNonPkiPackets() {
         ProtoCodec.RadioPacket packet = new ProtoCodec.RadioPacket(
                 0x8fd1336cL, 0xa1b3b3b8L, 0, ProtoCodec.RETICULUM_PORT, new byte[] {1}, false);
-        assertTrue(BridgeEngine.acceptsInbound(packet, 0, 0xa1b3b3b8L));
-        assertFalse(BridgeEngine.acceptsInbound(packet, 1, 0xa1b3b3b8L));
+        assertTrue(BridgeEngine.acceptsInbound(packet, 0, 0xa1b3b3b8L, true));
+        assertFalse(BridgeEngine.acceptsInbound(packet, 1, 0xa1b3b3b8L, true));
+    }
+
+    @Test public void rejectsSameChannelPacketAddressedElsewhereInUnicastMode() {
+        ProtoCodec.RadioPacket packet = new ProtoCodec.RadioPacket(
+                0x8fd1336cL, 0x01020304L, 0, ProtoCodec.RETICULUM_PORT, new byte[] {1}, false);
+        assertFalse(BridgeEngine.acceptsInbound(packet, 0, 0xa1b3b3b8L, true));
+        assertTrue(BridgeEngine.acceptsInbound(packet, 0, 0xa1b3b3b8L, false));
+    }
+
+    @Test public void decodesRoutingAckAndInboundRadioTelemetry() {
+        ProtoCodec.FromRadio ack = ProtoCodec.parseFromRadio(hex(
+                "12380d6c33d18f15b8b3b3a1220b08051202180035785634123504030201"
+                        + "450000e8c048016089ffffffffffffffff0170017803880101a80105"));
+        assertNotNull(ack.packet);
+        assertEquals(ProtoCodec.ROUTING_PORT, ack.packet.port);
+        assertEquals(0x12345678L, ack.packet.requestId);
+        assertEquals(Integer.valueOf(0), ack.packet.routingError);
+        assertEquals(0x01020304L, ack.packet.packetId);
+        assertEquals(Float.valueOf(-7.25f), ack.packet.rxSnr);
+        assertEquals(Integer.valueOf(-119), ack.packet.rxRssi);
+        assertEquals(2, ack.packet.hopsAway());
+        assertTrue(ack.packet.viaMqtt);
+        assertEquals(5, ack.packet.transportMechanism);
+
+        ProtoCodec.FromRadio data = ProtoCodec.parseFromRadio(hex(
+                "12320d6c33d18f15b8b3b3a12207084c120361626335111111114500009040"
+                        + "480260a8ffffffffffffffff017803880101a80101"));
+        assertNotNull(data.packet);
+        assertEquals(Float.valueOf(4.5f), data.packet.rxSnr);
+        assertEquals(Integer.valueOf(-88), data.packet.rxRssi);
+        assertEquals(1, data.packet.hopsAway());
+        assertFalse(data.packet.viaMqtt);
+        assertEquals(1, data.packet.transportMechanism);
     }
 
     private static byte[] hex(String value) {

@@ -259,7 +259,7 @@ final class BlePhoneApiTransport implements RadioTransport {
                 listener.onRadioState(true, "BLE PhoneAPI handshake complete as " + NodeId.format(localNode)
                         + "; MQTT uplink permission: " + mqttUplinkPermitted);
             }
-            if (message.packet != null && message.packet.port == ProtoCodec.RETICULUM_PORT) listener.onPacket(message.packet);
+            if (message.packet != null && ProtoCodec.isBridgePort(message.packet.port)) listener.onPacket(message.packet);
         } catch (IllegalArgumentException ignored) {}
     }
 
@@ -301,7 +301,7 @@ final class BlePhoneApiTransport implements RadioTransport {
         if (!writeBusy) listener.onRadioState(false, "BLE stack rejected a PhoneAPI write");
     }
 
-    @Override public void send(byte[] payload, long destination) throws Exception {
+    @Override public long send(byte[] payload, long destination) throws Exception {
         if (localNode == 0) throw new IllegalStateException("radio identity is not available yet");
         int id = packetId.updateAndGet(previous -> previous == -1 ? 1 : previous + 1);
         byte[] message = ProtoCodec.toRadioPacket(
@@ -313,6 +313,7 @@ final class BlePhoneApiTransport implements RadioTransport {
             deviceQueue.releaseAfterLocalFailure();
             throw new IllegalStateException("BLE PhoneAPI queue is full");
         }
+        return id & 0xffffffffL;
     }
 
     @Override public boolean isReady() { return localNode != 0; }

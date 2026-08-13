@@ -8,6 +8,11 @@ the Meshtastic Android app is not required.
 The bridge is intentionally loopback-only. Sideband or Columba runs on the
 same phone and connects to it as a normal Reticulum TCP client.
 
+Version 0.1.8 reports both bridge directions, the last accepted Meshtastic
+peer/path metadata and optional per-fragment Meshtastic routing ACK/NAK. A
+radio ACK is diagnostic information for one Meshtastic packet; it is not an
+LXMF delivery receipt.
+
 ## Reproducible build
 
 No Android SDK or Gradle installation is required on the host:

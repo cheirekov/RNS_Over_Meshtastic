@@ -43,7 +43,7 @@ The Linux/NixOS implementation provides:
   bounded retransmission cache;
 - optional Reticulum IFAC isolation with `network_name` and `passphrase`.
 
-Android bridge 0.1.7 provides:
+Android bridge 0.1.8 provides:
 
 - a direct BLE or TCP PhoneAPI connection without depending on the official
   Meshtastic Android app;
@@ -58,7 +58,11 @@ Android bridge 0.1.7 provides:
   pre-handshake frame hold instead of silently dropping early traffic;
 - Android `connectedDevice` foreground-service operation without a permanent
   partial wake lock, plus coalesced status updates and a safe PhoneAPI
-  heartbeat.
+  heartbeat;
+- separate TX/RX frame and fragment telemetry, last inbound peer/path/RF
+  metadata, and correlation of optional Meshtastic routing ACK/NAK responses;
+- delivery reporting that distinguishes radio confirmation, explicit NAK and
+  an unknown result after ACK timeout from Reticulum/LXMF delivery proofs.
 
 The `10 Mbps` value that a Reticulum client can display belongs to the local TCP
 connection to the Android bridge. It is not an estimate of LoRa throughput.
@@ -75,6 +79,8 @@ The following have been exercised on real hardware and clients:
 - Android over BLE → LoRa/MQTT path → remote Meshtastic gateway → Linux;
 - two Android phones, each with its own Meshtastic radio, in broadcast mode and
   without an intermediate Linux server;
+- two Android phones in fixed reciprocal Meshtastic unicast mode without an
+  intermediate Linux server;
 - operation with and without Reticulum IFAC;
 - a small image transfer as a controlled low-bandwidth test;
 - Android foreground operation on Pixel Android and Honor MagicOS after the
@@ -82,7 +88,7 @@ The following have been exercised on real hardware and clients:
 - MQTT downlink with a non-zero hop limit on a broker whose deployment permits
   it, including a returned Meshtastic routing ACK.
 
-Automated validation currently contains 31 Python tests and 20 Android unit
+Automated validation currently contains 31 Python tests and 24 Android unit
 tests, in addition to Android lint and containerised APK builds. Exact,
 repeatable procedures and the distinction between native Meshtastic DM and the
 decoded MQTT virtual-node path are in [docs/TESTING.md](docs/TESTING.md).
@@ -96,9 +102,9 @@ Work after the MVP is deliberately measurement-driven:
    and battery drain on more Android vendors.
 2. Characterise useful payload sizes and safe pacing for the supported modem
    presets instead of treating the local TCP rate as radio capacity.
-3. Improve delivery observability so an LXMF delivery that crossed the mesh is
-   not misleadingly shown as failed merely because a delayed proof was lost or
-   timed out on the constrained return path.
+3. Field-validate the new radio ACK/NAK telemetry against Reticulum/LXMF proofs
+   and tune the constrained return path without treating an ACK timeout as
+   proof that the payload was not delivered.
 4. Evaluate an adaptive profile: broadcast for discovery/announces and
    Meshtastic PKI unicast for known peers, without weakening Reticulum's own
    routing and security model.
@@ -114,6 +120,9 @@ See [docs/CAPACITY_AND_STORE_FORWARD.md](docs/CAPACITY_AND_STORE_FORWARD.md)
 for the queueing, file, location, voice-note and multi-radio design assessment,
 and [docs/ANDROID_BACKGROUND.md](docs/ANDROID_BACKGROUND.md) for the current
 power model and soak-test checklist.
+
+The agreed milestone order and the boundary between bridge, Reticulum and LXMF
+responsibilities are fixed in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Current boundaries and out of scope
 
@@ -181,6 +190,7 @@ Documentation by scenario:
 - [Android bridge testing](docs/ANDROID_TESTING.md)
 - [Direct Android broadcast](docs/DIRECT_ANDROID_BROADCAST.md)
 - [Android background operation](docs/ANDROID_BACKGROUND.md)
+- [Post-MVP roadmap](docs/ROADMAP.md)
 
 ## Safety and network policy
 

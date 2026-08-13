@@ -94,7 +94,7 @@ Local Reticulum TCP port = 7822
 Meshtastic channel index = 0        # HQ
 Hop limit = 3
 Radio addressing mode = gateway_unicast
-Linux gateway Node ID = !8fd13c64
+Unicast peer / gateway Meshtastic Node ID = !8fd13c64
 Fragment payload bytes = 200
 Global delay between Meshtastic transmissions = 2000 ms
 Request ACK = off
@@ -272,6 +272,60 @@ pacing и видими drain/backpressure/dropped counters.
 Не използвайте live telephone/PTT като capacity тест. Най-ниският аудио codec
 профил и двупосочният overhead надвишават практичния капацитет на този shared
 LoRa сегмент.
+
+## Android 0.1.8 reciprocal unicast и ACK telemetry
+
+Този тест е без Linux gateway. Двата Android bridge-а използват отделни
+Meshtastic radios и сочат взаимно към Node ID на другото radio.
+
+### Фаза A — pure LoRa, ACK изключен
+
+1. Изключете MQTT на двете radios и спрете Linux `rnsd`.
+2. Потвърдете с обикновен Meshtastic DM в двете посоки, че radios се достигат
+   и имат актуални NodeInfo/public keys.
+3. На phone A задайте `gateway_unicast` и Node ID на radio B; на phone B
+   задайте същия режим и Node ID на radio A.
+4. Използвайте еднакъв IFAC в двата Reticulum клиента и оставете
+   **Request Meshtastic radio ACK** изключено.
+5. Направете announce A→B, кратък LXMF текст A→B и отговор B→A.
+6. На двата bridge-а очаквайте да растат едновременно:
+
+```text
+TX RNS→mesh: ... frames / ... fragments
+RX mesh→RNS: ... frames / ... fragments
+```
+
+`last` трябва да показва Node ID на другото radio и, когато firmware го
+предоставя, `LoRa`, PKI/channel encryption, hops, SNR и RSSI. Редът за radio ACK
+трябва да казва `disabled`; LXMF delivery proof продължава да работи независимо.
+
+### Фаза B — pure LoRa, ACK включен
+
+1. Изчакайте radio queue да стане празна.
+2. Включете **Request Meshtastic radio ACK for unicast fragments** на двата
+   bridge-а и натиснете **Save & start**.
+3. Изпратете само един кратък LXMF текст във всяка посока.
+4. `confirmed` трябва да нарасне за потвърдените Meshtastic fragments, а
+   `pending` да се върне до нула. Броят е по radio fragment, не по LXMF message.
+5. Explicit `NAK` с име като `NO_ROUTE`, `MAX_RETRANSMIT`, `PKI_FAILED` или
+   `RATE_LIMIT_EXCEEDED` е реална radio грешка. `unknown` означава, че ACK не е
+   наблюдаван до timeout; не доказва, че LXMF съобщението не е пристигнало.
+
+Запишете за всеки опит двата bridge status блока и действителния LXMF delivery
+status. Това позволява да сравним radio ACK с крайния Reticulum/LXMF резултат.
+
+### Фаза C — MQTT-assisted повторение
+
+1. Включете MQTT и **Encryption enabled** на radios според използвания broker;
+   channel uplink/downlink и `config_ok_to_mqtt` трябва да разрешават трафика.
+2. Уверете се първо с Meshtastic DM, че MQTT-assisted маршрутът работи.
+3. Повторете по един кратък LXMF текст с ACK включен.
+4. Очаквайте `last` да показва `MQTT`, когато `via_mqtt`/transport metadata е
+   налична. Сравнете confirmed/NAK/unknown с pure-LoRa резултата.
+
+Едва след тези кратки тестове изпратете един файл 1–4 KiB при празна queue.
+Не сравнявайте файлове, докато short-message тестът не е записан и в двете
+посоки.
 
 ## След успешния първи тест
 

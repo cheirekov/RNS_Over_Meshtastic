@@ -108,7 +108,7 @@ public final class MainActivity extends Activity {
         mode = spinner(new String[] {"gateway_unicast", "broadcast"});
         add(form, "Radio addressing mode", mode);
         gateway = text("!8fd13c64", false);
-        add(form, "Gateway Meshtastic Node ID (unicast only)", gateway);
+        add(form, "Unicast peer / gateway Meshtastic Node ID", gateway);
         allowedSources = text("!aabbcc11, !11223344", false);
         add(form, "Allowed peer Node IDs (optional, broadcast only)", allowedSources);
         fragmentBody = text("200", true);
@@ -116,7 +116,7 @@ public final class MainActivity extends Activity {
         txInterval = text("2000", true);
         add(form, "Global delay between Meshtastic transmissions (ms)", txInterval);
         wantAck = new CheckBox(this);
-        wantAck.setText("Request Meshtastic ACK for unicast fragments");
+        wantAck.setText("Request Meshtastic radio ACK for unicast fragments (not an LXMF receipt)");
         form.addView(wantAck);
 
         LinearLayout buttons = new LinearLayout(this);

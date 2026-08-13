@@ -6,6 +6,7 @@ import java.util.Arrays;
 /** Minimal, dependency-free Meshtastic protobuf codec for PhoneAPI port 76 traffic. */
 final class ProtoCodec {
     static final int RETICULUM_PORT = 76;
+    static final int ROUTING_PORT = 5;
     static final int PRIORITY_RELIABLE = 70;
     // Data.bitfield bit 0 explicitly carries the radio owner's MQTT-uplink
     // policy. Mirror config_ok_to_mqtt instead of granting it unconditionally.
@@ -18,15 +19,43 @@ final class ProtoCodec {
         final int port;
         final byte[] payload;
         final boolean pkiEncrypted;
+        final long packetId;
+        final long requestId;
+        final Integer routingError;
+        final Float rxSnr;
+        final Integer rxRssi;
+        final int hopLimit;
+        final int hopStart;
+        final boolean viaMqtt;
+        final int transportMechanism;
 
         RadioPacket(long source, long destination, int channel, int port, byte[] payload, boolean pkiEncrypted) {
+            this(source, destination, channel, port, payload, pkiEncrypted,
+                    0, 0, null, null, null, 0, 0, false, 0);
+        }
+
+        RadioPacket(
+                long source, long destination, int channel, int port, byte[] payload, boolean pkiEncrypted,
+                long packetId, long requestId, Integer routingError, Float rxSnr, Integer rxRssi,
+                int hopLimit, int hopStart, boolean viaMqtt, int transportMechanism) {
             this.source = source;
             this.destination = destination;
             this.channel = channel;
             this.port = port;
             this.payload = payload;
             this.pkiEncrypted = pkiEncrypted;
+            this.packetId = packetId;
+            this.requestId = requestId;
+            this.routingError = routingError;
+            this.rxSnr = rxSnr;
+            this.rxRssi = rxRssi;
+            this.hopLimit = hopLimit;
+            this.hopStart = hopStart;
+            this.viaMqtt = viaMqtt;
+            this.transportMechanism = transportMechanism;
         }
+
+        int hopsAway() { return hopStart >= hopLimit ? hopStart - hopLimit : -1; }
     }
 
     static final class FromRadio {
@@ -73,6 +102,32 @@ final class ProtoCodec {
         Writer out = new Writer();
         out.bytesField(7, nested.bytes());
         return out.bytes();
+    }
+
+    static boolean isBridgePort(int port) { return port == RETICULUM_PORT || port == ROUTING_PORT; }
+
+    static String routingErrorName(int error) {
+        return switch (error) {
+            case 0 -> "NONE";
+            case 1 -> "NO_ROUTE";
+            case 2 -> "GOT_NAK";
+            case 3 -> "TIMEOUT";
+            case 4 -> "NO_INTERFACE";
+            case 5 -> "MAX_RETRANSMIT";
+            case 6 -> "NO_CHANNEL";
+            case 7 -> "TOO_LARGE";
+            case 8 -> "NO_RESPONSE";
+            case 9 -> "DUTY_CYCLE_LIMIT";
+            case 32 -> "BAD_REQUEST";
+            case 33 -> "NOT_AUTHORIZED";
+            case 34 -> "PKI_FAILED";
+            case 35 -> "PKI_UNKNOWN_PUBKEY";
+            case 36 -> "ADMIN_BAD_SESSION_KEY";
+            case 37 -> "ADMIN_PUBLIC_KEY_UNAUTHORIZED";
+            case 38 -> "RATE_LIMIT_EXCEEDED";
+            case 39 -> "PKI_SEND_FAIL_PUBLIC_KEY";
+            default -> "ERROR_" + error;
+        };
     }
 
     static byte[] toRadioPacket(
@@ -185,6 +240,15 @@ final class ProtoCodec {
         int port = 0;
         byte[] payload = null;
         boolean pkiEncrypted = false;
+        long packetId = 0;
+        long requestId = 0;
+        Integer routingError = null;
+        Float rxSnr = null;
+        Integer rxRssi = null;
+        int hopLimit = 0;
+        int hopStart = 0;
+        boolean viaMqtt = false;
+        int transportMechanism = 0;
         while (in.hasRemaining()) {
             int tag = in.readTag();
             int field = tag >>> 3;
@@ -196,32 +260,62 @@ final class ProtoCodec {
                 Data decoded = parseData(in.readBytes());
                 port = decoded.port;
                 payload = decoded.payload;
-            } else if (field == 17 && wire == 0) pkiEncrypted = in.readVarint() != 0;
+                requestId = decoded.requestId;
+                if (port == ROUTING_PORT && payload != null) routingError = parseRoutingError(payload);
+            } else if (field == 6 && wire == 5) packetId = in.readFixed32();
+            else if (field == 8 && wire == 5) rxSnr = Float.intBitsToFloat((int) in.readFixed32());
+            else if (field == 9 && wire == 0) hopLimit = (int) in.readVarint();
+            else if (field == 12 && wire == 0) rxRssi = (int) in.readVarint();
+            else if (field == 14 && wire == 0) viaMqtt = in.readVarint() != 0;
+            else if (field == 15 && wire == 0) hopStart = (int) in.readVarint();
+            else if (field == 17 && wire == 0) pkiEncrypted = in.readVarint() != 0;
+            else if (field == 21 && wire == 0) transportMechanism = (int) in.readVarint();
             else in.skip(wire);
         }
         if (payload == null) return null;
-        return new RadioPacket(source, destination, channel, port, payload, pkiEncrypted);
+        return new RadioPacket(source, destination, channel, port, payload, pkiEncrypted,
+                packetId, requestId, routingError, rxSnr, rxRssi,
+                hopLimit, hopStart, viaMqtt, transportMechanism);
     }
 
     private static Data parseData(byte[] encoded) {
         Reader in = new Reader(encoded);
         int port = 0;
         byte[] payload = null;
+        long requestId = 0;
         while (in.hasRemaining()) {
             int tag = in.readTag();
             int field = tag >>> 3;
             int wire = tag & 7;
             if (field == 1 && wire == 0) port = (int) in.readVarint();
             else if (field == 2 && wire == 2) payload = in.readBytes();
+            else if (field == 6 && wire == 5) requestId = in.readFixed32();
             else in.skip(wire);
         }
-        return new Data(port, payload);
+        return new Data(port, payload, requestId);
+    }
+
+    private static Integer parseRoutingError(byte[] encoded) {
+        Reader in = new Reader(encoded);
+        while (in.hasRemaining()) {
+            int tag = in.readTag();
+            int field = tag >>> 3;
+            int wire = tag & 7;
+            if (field == 3 && wire == 0) return (int) in.readVarint();
+            in.skip(wire);
+        }
+        return null;
     }
 
     private static final class Data {
         final int port;
         final byte[] payload;
-        Data(int port, byte[] payload) { this.port = port; this.payload = payload; }
+        final long requestId;
+        Data(int port, byte[] payload, long requestId) {
+            this.port = port;
+            this.payload = payload;
+            this.requestId = requestId;
+        }
     }
 
     private static final class Writer {

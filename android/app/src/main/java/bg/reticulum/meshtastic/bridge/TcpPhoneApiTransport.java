@@ -115,7 +115,7 @@ final class TcpPhoneApiTransport implements RadioTransport {
                 listener.onRadioState(true, "PhoneAPI handshake complete as " + NodeId.format(localNode)
                         + "; MQTT uplink permission: " + mqttUplinkPermitted);
             }
-            if (message.packet != null && message.packet.port == ProtoCodec.RETICULUM_PORT) {
+            if (message.packet != null && ProtoCodec.isBridgePort(message.packet.port)) {
                 listener.onPacket(message.packet);
             }
         } catch (Exception ignored) {
@@ -123,7 +123,7 @@ final class TcpPhoneApiTransport implements RadioTransport {
         }
     }
 
-    @Override public void send(byte[] payload, long destination) throws Exception {
+    @Override public long send(byte[] payload, long destination) throws Exception {
         if (localNode == 0) throw new IllegalStateException("radio identity is not available yet");
         int id = packetId.updateAndGet(previous -> previous == -1 ? 1 : previous + 1);
         byte[] message = ProtoCodec.toRadioPacket(
@@ -137,6 +137,7 @@ final class TcpPhoneApiTransport implements RadioTransport {
             deviceQueue.releaseAfterLocalFailure();
             throw error;
         }
+        return id & 0xffffffffL;
     }
 
     @Override public boolean isReady() { return localNode != 0; }
