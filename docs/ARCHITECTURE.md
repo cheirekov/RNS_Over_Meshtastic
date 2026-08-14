@@ -47,3 +47,10 @@ FragmentProtocol (port 76)
   transport does not persist arbitrary opaque Reticulum frames. Android keeps
   only a volatile, bounded five-minute inbound FIFO so a completed frame can
   survive a short local Sideband/Columba TCP restart.
+- Port 76 retains the legacy two-byte data header. A repair-only extension uses
+  `REQ` position zero to request the cached final fragment after an assembly
+  stalls; zero remains invalid as a data-fragment position. Updated peers
+  answer it, while legacy peers safely ignore it. Periodic repair is bounded to
+  three attempts per unresolved position with exponential backoff and one
+  scheduled request per pass. Broadcast repair does not request Meshtastic
+  radio ACKs, preventing a failed reverse path from multiplying control traffic.

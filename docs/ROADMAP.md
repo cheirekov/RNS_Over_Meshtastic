@@ -270,6 +270,50 @@ Android 0.1.13 премахва загубата при кратък local-clien
 Следва един комбиниран reconnect acceptance тест и после дълъг soak. Не са
 необходими още ръчни комбинации на същите MQTT настройки.
 
+### Android 0.1.13 reconnect, 0.1.14 repair и 0.1.15 asymmetric-path hardening
+
+Reconnect тестът отдели двата слоя ясно:
+
+- local spool-ът отчете `replayed 10 buffered frame(s)`, общо 15 replayed
+  frames, `expired: 0` и `rejected: 0`; следователно FIFO replay към локалния
+  Reticulum client работи;
+- въпреки това конкретно LXMF съобщение не се появи. Radio reassembly
+  едновременно показа 9 expired assemblies на единия край и `3 active,
+  3 awaiting final` на другия;
+- при активиран MQTT две от три кратки съобщения пристигнаха. Няма scheduler,
+  PhoneAPI или spool reject, който да обясни третото.
+
+Това доказва реален failure mode преди spool-а и е най-силното обяснение за
+липсващия текст: без final fragment port 76 receiver-ът не знае общия брой
+позиции, не създава завършен RNS frame и няма какво да replay-не към
+Sideband/Columba. Понеже transport-ът вижда opaque RNS frames, снимките сами по
+себе си не могат криптографски да свържат конкретния LXMF текст с конкретно
+assembly. Android 0.1.14 и актуалният Linux код добавят periodic scan на
+stalled assemblies. `REQ` с позиция `0` означава „върни cached final fragment“;
+след получаването му съществуващата missing-position repair логика довършва
+frame-а. Data fragment с позиция zero остава невалиден, така че wire форматът
+не се променя. Стар peer игнорира разширението; за реално възстановяване и
+sender, и receiver трябва да са 0.1.14/актуалния Linux код.
+
+Трите контролирани серии на 14 август отделиха radio-path проблема от bridge
+поведението:
+
+- с MQTT на крайното Wi-Fi radio двупосочните кратки съобщения минаха чисто;
+- без неговия MQTT едната посока продължи да работи, а обратната почти изчезна;
+- след изключване на локалния gateway остана същата асиметрия, с малко по-добър
+  процент при broadcast. Това съвпада с независимо наблюдаван еднопосочен слаб
+  Meshtastic път и не е RNS routing дефект;
+- 0.1.14 обаче усили отказа: един bridge стигна 48–56 periodic `REQ`, а другият
+  натрупа десетки `MAX_RETRANSMIT`, control-queue rejects и channel utilization
+  до около 48%. Следователно неограниченият петсекунден repair loop е отхвърлен.
+
+Android 0.1.15 и Linux кодът ограничават всяка липсваща позиция до три periodic
+опита с 5/10/20-секунден backoff и планират най-много един repair на scheduler
+pass; Android показва и текущия `capped` брой. В broadcast режим repair control
+остава unicast, но без Meshtastic radio ACK; Reticulum/LXMF proofs остават
+авторитетни. Целта не е да се скрие прекъснат Meshtastic маршрут, а той да се
+преживее без repair storm и без starvation на новите кратки frames.
+
 ## Приоритет 1 — измерена delivery policy
 
 Преди автоматизация се записват за кратък frame, няколко fragments и единичен

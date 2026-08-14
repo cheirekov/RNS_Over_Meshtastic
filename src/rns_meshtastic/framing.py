@@ -2,7 +2,9 @@
 
 The on-air header is two bytes: an unsigned packet index followed by a signed
 fragment position. A negative position marks the final fragment. Missing
-fragments are requested with ``b"REQ" + header``.
+fragments are requested with ``b"REQ" + header``. In the backwards-compatible
+repair extension, requested position zero means "retransmit the final
+fragment"; position zero remains invalid for data fragments.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ class _Assembly:
     fragments: dict[int, bytes] = field(default_factory=dict)
     final_position: int | None = None
     requested_at: dict[int, float] = field(default_factory=dict)
+    request_attempts: dict[int, int] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -61,20 +64,25 @@ class FragmentProtocol:
         fragment_body: int = DEFAULT_FRAGMENT_BODY,
         state_ttl: float = 180.0,
         request_cooldown: float = 5.0,
+        max_repair_attempts: int = 3,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not 1 <= fragment_body <= 230:
             raise ValueError("fragment_body must be between 1 and 230 bytes")
         if state_ttl <= 0 or request_cooldown <= 0:
             raise ValueError("state_ttl and request_cooldown must be positive")
+        if max_repair_attempts <= 0:
+            raise ValueError("max_repair_attempts must be positive")
         self.fragment_body = fragment_body
         self.state_ttl = state_ttl
         self.request_cooldown = request_cooldown
+        self.max_repair_attempts = max_repair_attempts
         self._clock = clock
         self._next_index = 0
         self._assemblies: dict[tuple[str, int], _Assembly] = {}
         self._tx_cache: OrderedDict[tuple[int, str], _CachedTx] = OrderedDict()
         self._completed: OrderedDict[tuple[str, int, bytes], float] = OrderedDict()
+        self._completed_indices: OrderedDict[tuple[str, int], float] = OrderedDict()
         self._lock = threading.RLock()
 
     def encode(self, frame: bytes, destination: str) -> list[Transmission]:
@@ -118,11 +126,42 @@ class FragmentProtocol:
         with self._lock:
             self._cleanup_locked()
 
+    def poll_repairs(self, max_requests: int = 1) -> ReceiveResult:
+        """Request stalled fragments with bounded exponential backoff."""
+        if max_requests <= 0:
+            return ReceiveResult()
+        with self._lock:
+            self._cleanup_locked()
+            now = self._clock()
+            result = ReceiveResult()
+            for (source, index), assembly in self._assemblies.items():
+                if now - assembly.updated_at < self.request_cooldown:
+                    continue
+                if assembly.final_position is None:
+                    missing = [0]
+                else:
+                    missing = [
+                        position
+                        for position in range(1, assembly.final_position + 1)
+                        if position not in assembly.fragments
+                    ]
+                remaining = max_requests - len(result.transmissions)
+                if remaining <= 0:
+                    break
+                self._append_repair_requests_locked(
+                    result, source, index, assembly, missing, now, remaining, False
+                )
+            return result
+
     def _handle_request_locked(self, source: str, metadata: bytes) -> ReceiveResult:
-        index, position = self._parse_header(metadata)
-        requested = abs(position)
+        if len(metadata) < HEADER.size:
+            raise FragmentError("fragment metadata is truncated")
+        index, position = HEADER.unpack_from(metadata)
         cached = self._tx_cache.get((index, source)) or self._tx_cache.get((index, "^all"))
-        if cached is None or requested not in cached.fragments:
+        if cached is None:
+            return ReceiveResult()
+        requested = max(cached.fragments) if position == 0 else abs(position)
+        if requested not in cached.fragments:
             return ReceiveResult()
         return ReceiveResult(
             transmissions=[Transmission(source, cached.fragments[requested], reason="retransmit")]
@@ -136,11 +175,22 @@ class FragmentProtocol:
 
         key = (source, index)
         now = self._clock()
+        if key in self._completed_indices:
+            return ReceiveResult()
         assembly = self._assemblies.setdefault(key, _Assembly(updated_at=now))
-        assembly.updated_at = now
-        assembly.fragments[position] = payload[HEADER.size :]
+        body = payload[HEADER.size :]
+        made_progress = assembly.fragments.get(position) != body
+        if wire_position < 0 and assembly.final_position != position:
+            made_progress = True
+        if made_progress:
+            assembly.updated_at = now
+            assembly.requested_at.pop(position, None)
+            assembly.request_attempts.pop(position, None)
+        assembly.fragments[position] = body
         if wire_position < 0:
             assembly.final_position = position
+            assembly.requested_at.pop(0, None)
+            assembly.request_attempts.pop(0, None)
 
         result = ReceiveResult()
         if assembly.final_position is None:
@@ -148,12 +198,9 @@ class FragmentProtocol:
 
         missing = [p for p in range(1, assembly.final_position + 1) if p not in assembly.fragments]
         if missing:
-            for missing_position in missing:
-                last_request = assembly.requested_at.get(missing_position, 0.0)
-                if now - last_request >= self.request_cooldown:
-                    request = REQUEST_PREFIX + HEADER.pack(index, missing_position)
-                    result.transmissions.append(Transmission(source, request, reason="request"))
-                    assembly.requested_at[missing_position] = now
+            self._append_repair_requests_locked(
+                result, source, index, assembly, missing, now, 1, True
+            )
             return result
 
         frame = b"".join(assembly.fragments[p] for p in range(1, assembly.final_position + 1))
@@ -164,7 +211,40 @@ class FragmentProtocol:
             result.frames.append(frame)
             self._completed[complete_key] = now
             self._completed.move_to_end(complete_key)
+            self._completed_indices[key] = now
+            self._completed_indices.move_to_end(key)
         return result
+
+    def _append_repair_requests_locked(
+        self,
+        result: ReceiveResult,
+        source: str,
+        index: int,
+        assembly: _Assembly,
+        missing: list[int],
+        now: float,
+        budget: int,
+        immediate: bool,
+    ) -> None:
+        for missing_position in missing:
+            if budget <= 0:
+                break
+            attempts = assembly.request_attempts.get(missing_position, 0)
+            if attempts >= self.max_repair_attempts:
+                continue
+            last_request = assembly.requested_at.get(missing_position, 0.0)
+            delay = self.request_cooldown * (2**attempts)
+            if attempts == 0:
+                due = immediate or now - assembly.updated_at >= self.request_cooldown
+            else:
+                due = now - last_request >= delay
+            if not due:
+                continue
+            request = REQUEST_PREFIX + HEADER.pack(index, missing_position)
+            result.transmissions.append(Transmission(source, request, reason="request"))
+            assembly.requested_at[missing_position] = now
+            assembly.request_attempts[missing_position] = attempts + 1
+            budget -= 1
 
     @staticmethod
     def _parse_header(payload: bytes) -> tuple[int, int]:
@@ -188,3 +268,8 @@ class FragmentProtocol:
             if completed_at >= cutoff:
                 break
             self._completed.pop(key, None)
+        while self._completed_indices:
+            key, completed_at = next(iter(self._completed_indices.items()))
+            if completed_at >= cutoff:
+                break
+            self._completed_indices.pop(key, None)

@@ -269,9 +269,9 @@ admission: ... rejected, ... send-failed; last reject: ...
 0.1.12 ще го покаже като `admission ... exceeds admission limit`; това е
 Reticulum-facing MTU/bitrate проблем, не резултат от междуградския radio тест.
 
-### Android 0.1.13 combined reconnect acceptance
+### Android 0.1.13 combined reconnect acceptance — резултат
 
-Този един тест заменя допълнителните MQTT permutation серии:
+Този тест замени допълнителните MQTT permutation серии:
 
 1. На двата края задайте `gateway_unicast`, body `200`, delay `2000 ms` и ACK
    `critical`. Потвърдете с по един уникален кратък текст във всяка посока.
@@ -289,6 +289,43 @@ Reticulum-facing MTU/bitrate проблем, не резултат от межд
 Тестът покрива path label, кратък client disconnect, FIFO replay и новите
 delivery counters. Петминутният volatile spool не е offline mailbox; за
 устойчиво store-and-forward се използва LXMF propagation node (`lxmd`).
+
+Полевият вариант беше изпълнен в broadcast/slot 1. Резултатът показа
+`replayed 10 buffered frame(s)`, 15 общо replayed,
+spool `expired: 0` и `rejected: 0`. Spool-ът е приел и подал завършените RNS
+frames правилно. Reassembly едновременно показа 9 expired assemblies на
+единия bridge и `3 active, 3 awaiting final` на другия. Това доказва реална
+загуба на legacy final fragments преди spool-а и е най-силното обяснение за
+липсващия текст, но opaque RNS transport-ът не може да съпостави конкретен
+encrypted LXMF текст с конкретно assembly само от тези снимки.
+
+### Android 0.1.15 bounded-repair regression
+
+Инсталирайте 0.1.15 и на двата Android края. При Android↔Linux обновете кода и
+рестартирайте `rnsd`; стар sender не разбира optional `REQ position 0` и няма да
+върне final fragment.
+
+Използвайте последната работеща конфигурация — включително broadcast/slot 1 и
+MQTT, ако така е измерен пътят. Не повтаряйте MQTT on/off матрицата и не
+изпращайте изображение:
+
+1. Изпратете три уникални кратки текста само в една посока, с 15 секунди между
+   тях, след което изчакайте 90 секунди. Повторете веднъж в обратната посока.
+2. Очакваният краен резултат е трите текста да пристигнат, `active`,
+   `awaiting final` и `missing` да се върнат до zero, без admission/device/spool
+   reject.
+3. Ако бъде изгубен final fragment, status-ът трябва да увеличи
+   `repair REQ: ... (final: N)`, последван от `retransmits`, и assembly-то да
+   завърши. Ако `final` остане zero, run-ът пак е валиден, но RF пътят не е
+   активирал тази repair branch; детерминистичните unit тестове я покриват.
+
+При прекъснат/асиметричен път една unresolved позиция може да увеличи `repair
+REQ` най-много с три и после да се появи в `capped`; не трябва да се наблюдават
+десетки повтарящи се REQ/NAK за едно assembly. В broadcast режим всички radio
+ACK са изключени, включително за unicast repair request/retransmit. При
+gateway-unicast `critical` продължава да защитава final и repair packets.
+
+Това е единственият необходим кратък field regression преди background soak.
 
 | Симптом | Най-вероятна причина |
 |---|---|

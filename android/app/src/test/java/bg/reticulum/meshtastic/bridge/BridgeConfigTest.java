@@ -40,19 +40,22 @@ public class BridgeConfigTest {
         FragmentProtocol.Transmission retransmit = new FragmentProtocol.Transmission(
                 "!aabbccdd", new byte[] {7, 1, 42}, "retransmit");
 
-        assertFalse(BridgeEngine.requestsRadioAck("critical", middle));
-        assertTrue(BridgeEngine.requestsRadioAck("critical", last));
-        assertFalse(BridgeEngine.requestsRadioAck("critical", only));
-        assertTrue(BridgeEngine.requestsRadioAck("critical", request));
-        assertTrue(BridgeEngine.requestsRadioAck("critical", retransmit));
-        assertTrue(BridgeEngine.requestsRadioAck("all", middle));
-        assertFalse(BridgeEngine.requestsRadioAck("off", last));
+        assertFalse(BridgeEngine.requestsRadioAck("critical", middle, false));
+        assertTrue(BridgeEngine.requestsRadioAck("critical", last, false));
+        assertFalse(BridgeEngine.requestsRadioAck("critical", only, false));
+        assertTrue(BridgeEngine.requestsRadioAck("critical", request, false));
+        assertTrue(BridgeEngine.requestsRadioAck("critical", retransmit, false));
+        assertTrue(BridgeEngine.requestsRadioAck("all", middle, false));
+        assertFalse(BridgeEngine.requestsRadioAck("off", last, false));
     }
 
     @Test public void broadcastNeverRequestsRadioAck() {
         FragmentProtocol.Transmission last = new FragmentProtocol.Transmission(
                 "^all", new byte[] {7, -1, 42}, "data");
-        assertFalse(BridgeEngine.requestsRadioAck("critical", last));
-        assertFalse(BridgeEngine.requestsRadioAck("all", last));
+        assertFalse(BridgeEngine.requestsRadioAck("critical", last, true));
+        assertFalse(BridgeEngine.requestsRadioAck("all", last, true));
+        FragmentProtocol.Transmission request = new FragmentProtocol.Transmission(
+                "!aabbccdd", new byte[] {'R', 'E', 'Q', 7, 1}, "request");
+        assertFalse(BridgeEngine.requestsRadioAck("critical", request, true));
     }
 }

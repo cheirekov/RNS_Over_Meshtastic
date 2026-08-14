@@ -7,6 +7,7 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class FragmentProtocolTest {
     @Test public void reassemblesOutOfOrderAndRequestsMissingFragment() {
@@ -57,5 +58,79 @@ public class FragmentProtocolTest {
         assertEquals(1, snapshot.activeAssemblies);
         assertEquals(1, snapshot.awaitingFinal);
         assertEquals(0, snapshot.missingFragments);
+    }
+
+    @Test public void periodicRepairRecoversMissingFinalFragment() {
+        AtomicLong now = new AtomicLong(100_000);
+        FragmentProtocol sender = new FragmentProtocol(10, 60_000, 5_000, now::get);
+        FragmentProtocol receiver = new FragmentProtocol(10, 60_000, 5_000, now::get);
+        byte[] frame = "final-fragment!".getBytes();
+        List<FragmentProtocol.Transmission> tx = sender.encode(frame, "^all");
+
+        receiver.receive("!abcdef01", tx.get(0).payload);
+        now.addAndGet(4_000);
+        receiver.receive("!abcdef01", tx.get(0).payload); // duplicate is not progress
+        now.addAndGet(1_001);
+        FragmentProtocol.Result repair = receiver.pollRepairs(1);
+
+        assertEquals(1, repair.transmissions.size());
+        assertArrayEquals(
+                new byte[] {'R', 'E', 'Q', tx.get(0).payload[0], 0},
+                repair.transmissions.get(0).payload);
+        FragmentProtocol.Result retransmit = sender.receive(
+                "!abcdef01", repair.transmissions.get(0).payload);
+        assertEquals(1, retransmit.transmissions.size());
+        assertArrayEquals(tx.get(tx.size() - 1).payload, retransmit.transmissions.get(0).payload);
+        FragmentProtocol.Result recovered = receiver.receive(
+                "!abcdef01", retransmit.transmissions.get(0).payload);
+        assertEquals(1, recovered.frames.size());
+        assertArrayEquals(frame, recovered.frames.get(0));
+        receiver.receive("!abcdef01", retransmit.transmissions.get(0).payload);
+        assertEquals(0, receiver.snapshot().activeAssemblies);
+        assertEquals(1, receiver.snapshot().finalRepairRequests);
+    }
+
+    @Test public void periodicRepairsAreBoundedAndBackOff() {
+        AtomicLong now = new AtomicLong(100_000);
+        FragmentProtocol sender = new FragmentProtocol(10, 300_000, 5_000, now::get);
+        FragmentProtocol receiver = new FragmentProtocol(10, 300_000, 5_000, now::get);
+        FragmentProtocol.Transmission first = sender.encode(
+                "final-fragment!".getBytes(), "^all").get(0);
+        receiver.receive("!abcdef01", first.payload);
+
+        now.addAndGet(5_001);
+        assertEquals(1, receiver.pollRepairs(1).transmissions.size());
+        now.addAndGet(9_999);
+        assertEquals(0, receiver.pollRepairs(1).transmissions.size());
+        now.addAndGet(2);
+        assertEquals(1, receiver.pollRepairs(1).transmissions.size());
+        now.addAndGet(19_999);
+        assertEquals(0, receiver.pollRepairs(1).transmissions.size());
+        now.addAndGet(2);
+        assertEquals(1, receiver.pollRepairs(1).transmissions.size());
+        assertEquals(1, receiver.snapshot().cappedRepairs);
+        now.addAndGet(100_000);
+        assertEquals(0, receiver.pollRepairs(1).transmissions.size());
+    }
+
+    @Test public void newFragmentProgressCanContinueAfterRepairCap() {
+        AtomicLong now = new AtomicLong(100_000);
+        FragmentProtocol sender = new FragmentProtocol(10, 300_000, 5_000, now::get);
+        FragmentProtocol receiver = new FragmentProtocol(10, 300_000, 5_000, now::get);
+        List<FragmentProtocol.Transmission> tx = sender.encode(
+                "0123456789abcdefghijKLMNO".getBytes(), "^all");
+        receiver.receive("!abcdef01", tx.get(0).payload);
+
+        for (long delay : new long[] {5_001, 10_001, 20_001}) {
+            now.addAndGet(delay);
+            assertEquals(1, receiver.pollRepairs(1).transmissions.size());
+        }
+
+        FragmentProtocol.Result progressed = receiver.receive(
+                "!abcdef01", tx.get(tx.size() - 1).payload);
+        assertEquals(1, progressed.transmissions.size());
+        assertArrayEquals(
+                new byte[] {'R', 'E', 'Q', tx.get(0).payload[0], 2},
+                progressed.transmissions.get(0).payload);
     }
 }

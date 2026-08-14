@@ -43,7 +43,7 @@ The Linux/NixOS implementation provides:
   bounded retransmission cache;
 - optional Reticulum IFAC isolation with `network_name` and `passphrase`.
 
-Android bridge 0.1.13 provides:
+Android bridge 0.1.15 provides:
 
 - a direct BLE or TCP PhoneAPI connection without depending on the official
   Meshtastic Android app;
@@ -66,8 +66,8 @@ Android bridge 0.1.13 provides:
 - synchronous accounting of BLE GATT write completion and two bounded local
   retries, so a late GATT rejection is not silently counted as a sent fragment;
 - explicit `off`, `critical` and diagnostic `all` Meshtastic ACK policies. The
-  critical policy protects final fragments of multi-fragment frames and repair control
-  traffic, avoiding the ACK-all congestion observed in field testing.
+  critical policy protects final fragments and repair control in fixed-unicast
+  mode, while broadcast never requests radio ACKs;
 - persistent PhoneAPI rejection telemetry, including explicit
   `DUTY_CYCLE_LIMIT (9)` and `RATE_LIMIT_EXCEEDED (38)` results; regulatory
   duty-cycle override is never enabled by the bridge;
@@ -78,7 +78,11 @@ Android bridge 0.1.13 provides:
   MQTT-origin packet whose final delivery mechanism was LoRa (`MQTT→LoRa`);
 - a volatile five-minute inbound spool (32 frames, 64 KiB) for a short local
   Sideband/Columba disconnect, with FIFO replay, deduplication, expiry and
-  rejection counters. This is not persistent LXMF store-and-forward.
+  rejection counters. This is not persistent LXMF store-and-forward;
+- bounded periodic repair of stalled assemblies, including a compatible `REQ`
+  for an unknown/lost final fragment. Each missing position gets at most three
+  attempts with exponential backoff, and only one repair is scheduled per
+  pass so a broken return path cannot monopolise the radio queue.
 
 The `10 Mbps` value that a Reticulum client displays belongs to the standard
 local TCP interface and is not an estimate of LoRa throughput. It is not purely
@@ -113,7 +117,7 @@ The following have been exercised on real hardware and clients:
 - MQTT downlink with a non-zero hop limit on a broker whose deployment permits
   it, including a returned Meshtastic routing ACK.
 
-Automated validation currently contains 31 Python tests and 38 Android unit
+Automated validation currently contains 32 Python tests and 39 Android unit
 tests, in addition to Android lint and containerised APK builds. Exact,
 repeatable procedures and the distinction between native Meshtastic DM and the
 decoded MQTT virtual-node path are in [docs/TESTING.md](docs/TESTING.md).

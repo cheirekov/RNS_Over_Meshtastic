@@ -55,6 +55,22 @@ minutes while the local Sideband/Columba TCP client reconnects. The FIFO is
 bounded to 32 frames and 64 KiB, deduplicated and visible in status counters;
 it is deliberately not a persistent mailbox or LXMF propagation node.
 
+Version 0.1.14 adds periodic fragment repair. The legacy two-byte format learns
+the fragment count only from the negative position on the final fragment. If
+that fragment is lost, an updated receiver now sends `REQ` with position zero,
+meaning "retransmit the final cached fragment". Updated Android and Linux
+senders answer it, after which the existing missing-position repair completes
+the frame. Position zero remains invalid for data, and older peers simply do
+not answer this optional repair extension.
+
+Version 0.1.15 hardens that extension for asymmetric or broken mesh paths.
+Periodic requests are limited to three per unresolved position with 5/10/20
+second backoff, and no more than one repair request is emitted per scheduler
+pass. A `capped` counter exposes unresolved positions whose repair budget is
+spent. Broadcast mode never requests Meshtastic radio ACKs, including for its
+unicast repair control packets; otherwise firmware retries and protocol repair
+can amplify each other when the reverse path is unavailable.
+
 ## Reproducible build
 
 No Android SDK or Gradle installation is required on the host:

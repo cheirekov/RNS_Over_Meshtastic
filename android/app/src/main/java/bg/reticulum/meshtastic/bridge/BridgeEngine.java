@@ -2,6 +2,7 @@ package bg.reticulum.meshtastic.bridge;
 
 import android.content.Context;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Executors;
@@ -76,6 +77,8 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     void start() {
         reticulum.start();
         radio.start(this);
+        ackScheduler.scheduleWithFixedDelay(
+                this::pollFragmentRepairs, 1_000, 1_000, TimeUnit.MILLISECONDS);
         publish();
     }
 
@@ -112,8 +115,8 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                     reportError("Inbound RNS spool full; dropped completed frame from " + source);
                 }
             }
-            if (!queueTransmissions(result.transmissions, false)) {
-                reportError("Meshtastic repair queue full; dropped fragment control traffic");
+            if (!queueRepairTransmissions(result.transmissions)) {
+                reportError("Meshtastic repair queue full; periodic retry will continue");
             }
             publish();
         } catch (Exception error) {
@@ -159,11 +162,21 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
         return transmit.enqueue(transmissions, waitForCapacity);
     }
 
+    private boolean queueRepairTransmissions(
+            List<FragmentProtocol.Transmission> transmissions) throws InterruptedException {
+        boolean accepted = true;
+        for (FragmentProtocol.Transmission transmission : transmissions) {
+            if (!transmit.enqueue(Collections.singletonList(transmission), false)) accepted = false;
+        }
+        return accepted;
+    }
+
     private void sendTransmission(FragmentProtocol.Transmission transmission) throws Exception {
         if (!awaitRadioIdentity()) {
             throw new IllegalStateException("radio identity was not received within 45 seconds");
         }
-        boolean requestAck = requestsRadioAck(config.ackPolicy, transmission);
+        boolean requestAck = requestsRadioAck(
+                config.ackPolicy, transmission, config.mode.equals("broadcast"));
         long packetId = radio.send(
                 transmission.payload, NodeId.parse(transmission.destination), requestAck);
         fragmentsToMesh.incrementAndGet();
@@ -227,8 +240,10 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                         + reassembly.awaitingFinal + " awaiting final, "
                         + reassembly.missingFragments + " missing; completed: "
                         + reassembly.completedFrames + ", repair REQ: "
-                        + reassembly.repairRequests + ", retransmits: "
-                        + reassembly.retransmissions + ", expired: "
+                        + reassembly.repairRequests + " (final: "
+                        + reassembly.finalRepairRequests + "), retransmits: "
+                        + reassembly.retransmissions + ", capped: "
+                        + reassembly.cappedRepairs + ", expired: "
                         + reassembly.expiredAssemblies + ", duplicates: "
                         + reassembly.duplicateFrames
                         + "\nadmission: " + queue.rejectedFrames + " rejected, "
@@ -240,7 +255,10 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                     + " NAK, " + ack.unknown + " unknown, " + ack.pending
                     + " pending; last: " + ack.lastResult;
         } else {
-            summary += "\nradio ACK: disabled (Reticulum/LXMF proofs remain authoritative)";
+            String reason = config.mode.equals("broadcast")
+                    ? "disabled in broadcast mode" : "disabled";
+            summary += "\nradio ACK: " + reason
+                    + " (Reticulum/LXMF proofs remain authoritative)";
         }
         if (!lastError.isEmpty()) summary += "\nlast error: " + lastError;
         status.onStatus(summary);
@@ -288,7 +306,9 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
         return packet.transportMechanism == 0 ? "MQTT-origin, arrival unknown" : "MQTT→" + arrival;
     }
 
-    static boolean requestsRadioAck(String policy, FragmentProtocol.Transmission transmission) {
+    static boolean requestsRadioAck(
+            String policy, FragmentProtocol.Transmission transmission, boolean broadcastMode) {
+        if (broadcastMode) return false;
         if (transmission.destination.equals("^all") || policy.equals("off")) return false;
         if (policy.equals("all")) return true;
         if (!policy.equals("critical")) throw new IllegalArgumentException("unknown ACK policy " + policy);
@@ -309,6 +329,21 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                 publish();
                 scheduleAckSweep();
             }, delay, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private void pollFragmentRepairs() {
+        if (closed) return;
+        try {
+            FragmentProtocol.Result result = fragments.pollRepairs(1);
+            if (result.transmissions.isEmpty()) return;
+            if (!queueRepairTransmissions(result.transmissions)) {
+                reportError("Meshtastic periodic repair queue full; repair delayed");
+            } else publish();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        } catch (Exception error) {
+            reportError("Meshtastic periodic repair failed: " + useful(error));
         }
     }
 

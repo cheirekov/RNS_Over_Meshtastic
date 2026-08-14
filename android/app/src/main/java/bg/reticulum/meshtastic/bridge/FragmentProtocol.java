@@ -5,11 +5,13 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.LongSupplier;
 
 /** Two-byte legacy fragmentation compatible with landandair/RNS_Over_Meshtastic. */
 final class FragmentProtocol {
@@ -38,29 +40,41 @@ final class FragmentProtocol {
         final long completedFrames;
         final long duplicateFrames;
         final long repairRequests;
+        final long finalRepairRequests;
+        final int cappedRepairs;
         final long retransmissions;
         final long expiredAssemblies;
 
         Snapshot(
                 int activeAssemblies, int awaitingFinal, int missingFragments,
-                long completedFrames, long duplicateFrames, long repairRequests,
-                long retransmissions, long expiredAssemblies) {
+                long completedFrames, long duplicateFrames, long repairRequests, long finalRepairRequests,
+                int cappedRepairs, long retransmissions, long expiredAssemblies) {
             this.activeAssemblies = activeAssemblies;
             this.awaitingFinal = awaitingFinal;
             this.missingFragments = missingFragments;
             this.completedFrames = completedFrames;
             this.duplicateFrames = duplicateFrames;
             this.repairRequests = repairRequests;
+            this.finalRepairRequests = finalRepairRequests;
+            this.cappedRepairs = cappedRepairs;
             this.retransmissions = retransmissions;
             this.expiredAssemblies = expiredAssemblies;
         }
     }
 
     private static final class Assembly {
+        final String source;
+        final int index;
         long updated;
         Integer last;
         final Map<Integer, byte[]> fragments = new HashMap<>();
         final Map<Integer, Long> requested = new HashMap<>();
+        final Map<Integer, Integer> requestAttempts = new HashMap<>();
+
+        Assembly(String source, int index) {
+            this.source = source;
+            this.index = index;
+        }
     }
 
     private static final class CachedTx {
@@ -75,23 +89,33 @@ final class FragmentProtocol {
     private final int bodySize;
     private final long ttlMillis;
     private final long requestCooldownMillis;
+    private final LongSupplier clock;
+    private static final int MAX_REPAIR_ATTEMPTS = 3;
     private int nextIndex;
     private final Map<String, Assembly> assemblies = new HashMap<>();
     private final LinkedHashMap<String, CachedTx> txCache = new LinkedHashMap<>();
     private final LinkedHashMap<String, Long> completed = new LinkedHashMap<>();
+    private final LinkedHashMap<String, Long> completedIndices = new LinkedHashMap<>();
     private long completedFrames;
     private long duplicateFrames;
     private long repairRequests;
+    private long finalRepairRequests;
     private long retransmissions;
     private long expiredAssemblies;
 
-    FragmentProtocol(int bodySize) { this(bodySize, 180_000, 5_000); }
+    FragmentProtocol(int bodySize) { this(bodySize, 180_000, 5_000, System::currentTimeMillis); }
 
     FragmentProtocol(int bodySize, long ttlMillis, long requestCooldownMillis) {
+        this(bodySize, ttlMillis, requestCooldownMillis, System::currentTimeMillis);
+    }
+
+    FragmentProtocol(
+            int bodySize, long ttlMillis, long requestCooldownMillis, LongSupplier clock) {
         if (bodySize < 1 || bodySize > 230) throw new IllegalArgumentException("fragment body must be 1..230 bytes");
         this.bodySize = bodySize;
         this.ttlMillis = ttlMillis;
         this.requestCooldownMillis = requestCooldownMillis;
+        this.clock = clock;
     }
 
     synchronized List<Transmission> encode(byte[] frame, String destination) {
@@ -127,23 +151,29 @@ final class FragmentProtocol {
         int position = Math.abs(wirePosition);
         long now = now();
         String key = source + ":" + index;
-        Assembly assembly = assemblies.computeIfAbsent(key, ignored -> new Assembly());
-        assembly.updated = now;
-        assembly.fragments.put(position, Arrays.copyOfRange(payload, 2, payload.length));
-        if (wirePosition < 0) assembly.last = position;
+        if (completedIndices.containsKey(key)) {
+            duplicateFrames++;
+            return new Result();
+        }
+        Assembly assembly = assemblies.computeIfAbsent(key, ignored -> new Assembly(source, index));
+        byte[] body = Arrays.copyOfRange(payload, 2, payload.length);
+        boolean madeProgress = !Arrays.equals(assembly.fragments.get(position), body)
+                || (wirePosition < 0 && !Integer.valueOf(position).equals(assembly.last));
+        if (madeProgress) {
+            assembly.updated = now;
+            assembly.requested.remove(position);
+            assembly.requestAttempts.remove(position);
+        }
+        assembly.fragments.put(position, body);
+        if (wirePosition < 0) {
+            assembly.last = position;
+            assembly.requested.remove(0);
+            assembly.requestAttempts.remove(0);
+        }
 
         Result result = new Result();
         if (assembly.last == null) return result;
-        for (int p = 1; p <= assembly.last; p++) {
-            if (!assembly.fragments.containsKey(p)) {
-                long lastRequest = assembly.requested.getOrDefault(p, 0L);
-                if (now - lastRequest >= requestCooldownMillis) {
-                    result.transmissions.add(new Transmission(source, new byte[] {'R', 'E', 'Q', (byte) index, (byte) p}, "request"));
-                    assembly.requested.put(p, now);
-                    repairRequests++;
-                }
-            }
-        }
+        appendRepairRequests(result, assembly, missingPositions(assembly), now, 1, true);
         if (!result.transmissions.isEmpty()) return result;
 
         ByteArrayOutputStream frame = new ByteArrayOutputStream();
@@ -157,8 +187,26 @@ final class FragmentProtocol {
         if (!completed.containsKey(completeKey)) {
             result.frames.add(complete);
             completed.put(completeKey, now);
+            completedIndices.put(key, now);
             completedFrames++;
         } else duplicateFrames++;
+        return result;
+    }
+
+    synchronized Result pollRepairs(int maxRequests) {
+        cleanup();
+        long now = now();
+        Result result = new Result();
+        if (maxRequests <= 0) return result;
+        for (Assembly assembly : assemblies.values()) {
+            if (now - assembly.updated < requestCooldownMillis) continue;
+            List<Integer> missing = assembly.last == null
+                    ? Collections.singletonList(0) : missingPositions(assembly);
+            appendRepairRequests(
+                    result, assembly, missing, now,
+                    maxRequests - result.transmissions.size(), false);
+            if (result.transmissions.size() >= maxRequests) break;
+        }
         return result;
     }
 
@@ -169,6 +217,9 @@ final class FragmentProtocol {
         int position = Math.abs((int) payload[4]);
         CachedTx cached = txCache.get(cacheKey(index, source));
         if (cached == null) cached = txCache.get(cacheKey(index, "^all"));
+        if (cached != null && position == 0 && !cached.fragments.isEmpty()) {
+            position = cached.fragments.keySet().stream().mapToInt(Integer::intValue).max().orElse(0);
+        }
         if (cached != null && cached.fragments.containsKey(position)) {
             result.transmissions.add(new Transmission(source, cached.fragments.get(position), "retransmit"));
             retransmissions++;
@@ -176,23 +227,66 @@ final class FragmentProtocol {
         return result;
     }
 
+    private List<Integer> missingPositions(Assembly assembly) {
+        List<Integer> missing = new ArrayList<>();
+        if (assembly.last == null) return missing;
+        for (int position = 1; position <= assembly.last; position++) {
+            if (!assembly.fragments.containsKey(position)) missing.add(position);
+        }
+        return missing;
+    }
+
+    private void appendRepairRequests(
+            Result result, Assembly assembly, List<Integer> missing, long now,
+            int budget, boolean immediate) {
+        for (int position : missing) {
+            if (budget <= 0) break;
+            int attempts = assembly.requestAttempts.getOrDefault(position, 0);
+            if (attempts >= MAX_REPAIR_ATTEMPTS) continue;
+            long lastRequest = assembly.requested.getOrDefault(position, 0L);
+            long delay = requestCooldownMillis * (1L << attempts);
+            boolean due = attempts == 0
+                    ? immediate || now - assembly.updated >= requestCooldownMillis
+                    : now - lastRequest >= delay;
+            if (!due) continue;
+            result.transmissions.add(new Transmission(
+                    assembly.source,
+                    new byte[] {'R', 'E', 'Q', (byte) assembly.index, (byte) position},
+                    "request"));
+            assembly.requested.put(position, now);
+            assembly.requestAttempts.put(position, attempts + 1);
+            repairRequests++;
+            if (position == 0) finalRepairRequests++;
+            budget--;
+        }
+    }
+
     synchronized Snapshot snapshot() {
         cleanup();
         int awaitingFinal = 0;
         int missingFragments = 0;
+        int cappedRepairs = 0;
         for (Assembly assembly : assemblies.values()) {
             if (assembly.last == null) {
                 awaitingFinal++;
+                if (assembly.requestAttempts.getOrDefault(0, 0) >= MAX_REPAIR_ATTEMPTS) {
+                    cappedRepairs++;
+                }
                 continue;
             }
             for (int position = 1; position <= assembly.last; position++) {
-                if (!assembly.fragments.containsKey(position)) missingFragments++;
+                if (!assembly.fragments.containsKey(position)) {
+                    missingFragments++;
+                    if (assembly.requestAttempts.getOrDefault(position, 0) >= MAX_REPAIR_ATTEMPTS) {
+                        cappedRepairs++;
+                    }
+                }
             }
         }
         return new Snapshot(
                 assemblies.size(), awaitingFinal, missingFragments,
-                completedFrames, duplicateFrames, repairRequests,
-                retransmissions, expiredAssemblies);
+                completedFrames, duplicateFrames, repairRequests, finalRepairRequests,
+                cappedRepairs, retransmissions, expiredAssemblies);
     }
 
     private void cleanup() {
@@ -207,6 +301,8 @@ final class FragmentProtocol {
         txCache.entrySet().removeIf(entry -> entry.getValue().created < cutoff);
         Iterator<Map.Entry<String, Long>> iterator = completed.entrySet().iterator();
         while (iterator.hasNext()) if (iterator.next().getValue() < cutoff) iterator.remove();
+        Iterator<Map.Entry<String, Long>> indexIterator = completedIndices.entrySet().iterator();
+        while (indexIterator.hasNext()) if (indexIterator.next().getValue() < cutoff) indexIterator.remove();
     }
 
     private static boolean startsWith(byte[] value, byte[] prefix) {
@@ -216,7 +312,7 @@ final class FragmentProtocol {
     }
 
     private static String cacheKey(int index, String destination) { return index + ":" + destination; }
-    private static long now() { return System.currentTimeMillis(); }
+    private long now() { return clock.getAsLong(); }
 
     private static String digest(byte[] value) {
         try {

@@ -212,7 +212,7 @@ class RNSMeshtasticInterface(Interface):
             try:
                 item = self._tx_queue.get(timeout=0.5)
             except queue.Empty:
-                self.protocol.cleanup()
+                self._queue_due_repairs()
                 continue
             try:
                 while not self._stop.is_set() and not self._backend_online.wait(timeout=1.0):
@@ -222,6 +222,7 @@ class RNSMeshtasticInterface(Interface):
                 self.backend.send(item.transmission.payload, item.transmission.destination)
                 if self.tx_interval:
                     self._stop.wait(self.tx_interval)
+                self._queue_due_repairs()
             except Exception as exc:
                 RNS.log(f"{self}: TX failed, packet returned to queue: {exc}", RNS.LOG_WARNING)
                 if not self._stop.wait(2.0):
@@ -231,6 +232,15 @@ class RNSMeshtasticInterface(Interface):
                         RNS.log(f"{self}: TX queue full after retry", RNS.LOG_ERROR)
             finally:
                 self._tx_queue.task_done()
+
+    def _queue_due_repairs(self) -> None:
+        # One bounded repair per scheduler pass prevents a broken/asymmetric
+        # return path from starving normal Reticulum traffic.
+        for transmission in self.protocol.poll_repairs(max_requests=1).transmissions:
+            try:
+                self._put_tx(transmission, priority=0)
+            except queue.Full:
+                RNS.log(f"{self}: TX queue full while scheduling periodic repair", RNS.LOG_ERROR)
 
     def _on_backend_state(self, online: bool, detail: str | None) -> None:
         self.online = online
