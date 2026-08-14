@@ -73,3 +73,22 @@ def test_send_mirrors_radio_mqtt_policy(mqtt_permitted):
         "hopLimit": 3,
         "pkiEncrypted": False,
     }
+
+
+def test_send_can_force_mqtt_forwarding_off_without_changing_radio_config():
+    backend = NativeBackend(
+        NativeConfig(
+            connection="tcp",
+            tcp_host="127.0.0.1",
+            mqtt_forwarding_policy="force_off",
+        )
+    )
+    interface = FakeInterface(True)
+    backend._interface = interface
+    backend._portnum = 76
+
+    backend.send(b"reticulum", "!8fd1336c")
+
+    packet, _ = interface.sent[0]
+    assert not packet.decoded.HasField("bitfield")
+    assert packet.decoded.bitfield == 0

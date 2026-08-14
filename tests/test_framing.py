@@ -116,6 +116,50 @@ def test_new_fragment_progress_can_continue_after_repair_cap():
     assert requested_position == 2
 
 
+def test_global_repair_budget_throttles_concurrent_incomplete_frames():
+    now = [100.0]
+    sender = FragmentProtocol(fragment_body=10, clock=lambda: now[0])
+    receiver = FragmentProtocol(
+        fragment_body=10,
+        request_cooldown=1.0,
+        max_repair_requests_per_window=2,
+        repair_window=60.0,
+        clock=lambda: now[0],
+    )
+
+    immediate_repairs = 0
+    for suffix in (b"a", b"b", b"c"):
+        fragments = sender.encode(b"0123456789abcdefghij" + suffix, "^all")
+        receiver.receive("!00000001", fragments[0].payload)
+        result = receiver.receive("!00000001", fragments[-1].payload)
+        immediate_repairs += len(result.transmissions)
+
+    assert immediate_repairs == 2
+    assert receiver.repair_requests == 2
+    assert receiver.repair_throttled == 1
+
+    now[0] += 60.1
+    assert len(receiver.poll_repairs().transmissions) == 1
+
+
+def test_receive_can_defer_control_without_consuming_repair_attempt():
+    now = [100.0]
+    sender = FragmentProtocol(fragment_body=10, clock=lambda: now[0])
+    receiver = FragmentProtocol(fragment_body=10, request_cooldown=1.0, clock=lambda: now[0])
+    fragments = sender.encode(b"0123456789abcdefghijK", "^all")
+
+    receiver.receive("!00000001", fragments[0].payload)
+    deferred = receiver.receive(
+        "!00000001", fragments[-1].payload, allow_control=False
+    )
+    assert deferred.transmissions == []
+    assert receiver.repair_requests == 0
+
+    now[0] += 1.1
+    assert len(receiver.poll_repairs().transmissions) == 1
+    assert receiver.repair_requests == 1
+
+
 def test_completed_duplicate_is_suppressed():
     sender = FragmentProtocol(fragment_body=20)
     receiver = FragmentProtocol(fragment_body=20)

@@ -18,7 +18,12 @@
     tcp_port = 4403
     channel_index = 0
     hop_limit = 3
+    # inherit preserves the radio policy; force_off proves a pure-LoRa path.
+    mqtt_forwarding_policy = inherit
     tx_interval = 2.0
+    # Global repair-storm containment across all incomplete frames.
+    repair_request_budget = 12
+    repair_budget_window = 60.0
 
     mesh_mode = gateway_unicast
     gateway_role = hub

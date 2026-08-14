@@ -87,6 +87,8 @@ class RNSMeshtasticInterface(Interface):
             fragment_body=_int(config, "fragment_body", 200),
             state_ttl=_float(config, "fragment_ttl", 180.0),
             request_cooldown=_float(config, "request_cooldown", 5.0),
+            max_repair_requests_per_window=_int(config, "repair_request_budget", 12),
+            repair_window=_float(config, "repair_budget_window", 60.0),
         )
         self.backend = self._make_backend(config)
         self.local_node_id: str | None = None
@@ -139,6 +141,9 @@ class RNSMeshtasticInterface(Interface):
                 hop_limit=_int(config, "hop_limit", 3),
                 want_ack=_bool(config, "want_ack", False),
                 pki_required=_bool(config, "pki_required", False),
+                mqtt_forwarding_policy=str(
+                    config.get("mqtt_forwarding_policy", "inherit")
+                ).strip().lower(),
             )
             return NativeBackend(native)
 
@@ -236,7 +241,9 @@ class RNSMeshtasticInterface(Interface):
     def _queue_due_repairs(self) -> None:
         # One bounded repair per scheduler pass prevents a broken/asymmetric
         # return path from starving normal Reticulum traffic.
-        for transmission in self.protocol.poll_repairs(max_requests=1).transmissions:
+        for transmission in self.protocol.poll_repairs(
+            max_requests=1, allow_control=not self._tx_queue.full()
+        ).transmissions:
             try:
                 self._put_tx(transmission, priority=0)
             except queue.Full:
@@ -278,7 +285,9 @@ class RNSMeshtasticInterface(Interface):
                 if destination not in valid_destinations:
                     return
         try:
-            result = self.protocol.receive(source, payload)
+            result = self.protocol.receive(
+                source, payload, allow_control=not self._tx_queue.full()
+            )
         except FragmentError as exc:
             RNS.log(f"{self}: ignored malformed fragment from {source}: {exc}", RNS.LOG_WARNING)
             return

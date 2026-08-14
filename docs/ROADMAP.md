@@ -295,17 +295,20 @@ frame-а. Data fragment с позиция zero остава невалиден, 
 не се променя. Стар peer игнорира разширението; за реално възстановяване и
 sender, и receiver трябва да са 0.1.14/актуалния Linux код.
 
-Трите контролирани серии на 14 август отделиха radio-path проблема от bridge
-поведението:
+Трите контролирани серии на 14 август са проведени само в `broadcast` режим и
+отделиха radio-path проблема от bridge поведението, но не сравняват broadcast
+с fixed unicast:
 
 - с MQTT на крайното Wi-Fi radio двупосочните кратки съобщения минаха чисто;
 - без неговия MQTT едната посока продължи да работи, а обратната почти изчезна;
-- след изключване на локалния gateway остана същата асиметрия, с малко по-добър
-  процент при broadcast. Това съвпада с независимо наблюдаван еднопосочен слаб
-  Meshtastic път и не е RNS routing дефект;
+- след изключване на локалния gateway остана същата асиметрия. Това съвпада с
+  независимо наблюдаван еднопосочен слаб Meshtastic път и не е RNS routing
+  дефект, но fixed-unicast поведението трябва да се измери отделно;
 - 0.1.14 обаче усили отказа: един bridge стигна 48–56 periodic `REQ`, а другият
   натрупа десетки `MAX_RETRANSMIT`, control-queue rejects и channel utilization
-  до около 48%. Следователно неограниченият петсекунден repair loop е отхвърлен.
+  до около 48%. Макар data frames да са broadcast, repair request/retransmit
+  пакетите са unicast и при 0.1.14 `critical` искаше radio ACK за тях.
+  Следователно неограниченият петсекунден repair loop е отхвърлен.
 
 Android 0.1.15 и Linux кодът ограничават всяка липсваща позиция до три periodic
 опита с 5/10/20-секунден backoff и планират най-много един repair на scheduler
@@ -313,6 +316,115 @@ pass; Android показва и текущия `capped` брой. В broadcast �
 остава unicast, но без Meshtastic radio ACK; Reticulum/LXMF proofs остават
 авторитетни. Целта не е да се скрие прекъснат Meshtastic маршрут, а той да се
 преживее без repair storm и без starvation на новите кратки frames.
+
+### Android 0.1.15 bounded-repair field result
+
+Следващият двурежимен тест е проведен с изключен MQTT broker client на
+крайните radios, първо в broadcast и после в reciprocal fixed-unicast:
+
+- broadcast `ab1` и `bb1` са получени за приблизително 3 и 6 секунди и са
+  получили LXMF delivery status;
+- fixed-unicast `au1` и `bu1` са получени за приблизително 4 и 11 секунди, но
+  изпращачите по-късно са показали `Failed`, тоест payload delivery е успяло,
+  а обратният LXMF proof не е наблюдаван в клиентския timeout;
+- и в двата режима няма scheduler/device reject, local drop, expired assembly
+  или `capped`; всички наблюдавани assemblies са завършили. Не се повтаря
+  0.1.14 repair/ACK storm, така че bounded-repair regression преминава за този
+  реален път;
+- това не е pure-LoRa тест. Bridge status показва `OK-to-MQTT permission: true`,
+  `MQTT` на Wi-Fi radio и `MQTT→LoRa` на pager-а. Изключването на локалния MQTT
+  broker client не изчиства `Data.bitfield` разрешението друг Meshtastic gateway
+  да uplink-не пакета. Следователно поне част от port 76 data/repair трафика е
+  използвала публична MQTT инфраструктура.
+
+За доказуем pure-LoRa regression 0.1.17 добавя transport настройка, която може
+безопасно да форсира `OK-to-MQTT=false` за bridge packet-ите, без да включва
+разрешението против radio policy. API е `inherit / force_off`; `force_on`
+умишлено не съществува.
+
+### Android 0.1.15 storm result и 0.1.16 containment
+
+Контролираната буря до приблизително 50% ChUtil показа, че per-position лимитът
+сам по себе си не е глобален лимит: единият край отчете 68 repair REQ, другият
+58 retransmits, 27/46 backpressure събития и съответно 2/6 admission rejects.
+При втория край radio ACK return path беше практически неизползваем — 0
+confirmed и 92 unknown — докато другата посока имаше 59 confirmed. Това е
+асиметрия на transport/control path, не доказателство за 92 недоставени LXMF
+съобщения. Празната крайна queue също не отменя факта, че control бурята вече е
+изяла airtime.
+
+0.1.16 въвежда един общ rolling budget от 12 repair requests за 60 секунди за
+всички assemblies, без промяна на port 76 wire format. Repair, който не може да
+влезе в control queue, се отлага без да изразходва per-position опит. Scheduler
+редува чакащ control с data, а telemetry разделя data reject/failure от control
+reject/failure. Поправен е и reassembly edge case, при който capped missing
+fragment можеше да доведе до опит за сглобяване на непълен frame.
+
+Новият optional `adaptive` ACK режим използва sparse `critical` selection, но
+го спира за пет минути при 12 pending без нито едно потвърждение или при поне 8
+resolved резултата с под 25% confirmations. Това намалява ACK amplification по
+доказано лош обратен път, без да превръща radio ACK в LXMF delivery verdict.
+Timestamp/version diagnostics вече се копират директно от Android UI.
+
+Първият 0.1.16 reciprocal-unicast run достави и четирите кратки payload-а без
+data/control admission failure, device reject или local retry. Две LXMF
+съобщения получиха proof, а две пристигнаха без proof в наблюдавания прозорец.
+ACK пътят остана силно асиметричен: 13 confirmed на единия край срещу 0
+confirmed, 3 unknown и 13 pending на другия. Тестът е бил с `critical`, не с
+`adaptive`, и не е pure-LoRa: статусът показва `MQTT` и `MQTT→LoRa`, въпреки
+спрените broker clients на крайните radios. Това окончателно оправдава
+per-packet `force_off`, вместо още двусмислени MQTT-off тестове.
+
+0.1.17 реализира `inherit / force_off` както за Android, така и за Linux native
+PhoneAPI. Диагностиката показва configured/effective policy и запазва peak
+bridge queue и peak device queue occupancy до рестарт, така че празната крайна
+queue вече не заличава high-water mark от теста.
+
+Следващият broadcast report с 0.1.16 е чист от queue pressure и repair storm,
+но показва 2/3 и 5/8 RNS frames/fragments на двата края. Контролната проверка
+на оператора установява, че ChUtil пада до 0 след спиране на bridge-а. Затова за
+този setup трафикът не се приписва на ambient mesh: bridge-ът действително
+предава фонови Reticulum рамки, макар cumulative counters да не показват вида
+им. 0.1.18 добавя frame-type breakdown (data/announce/link/proof), последен RNS
+context и rolling 60-second data/repair fragment/byte прозорец. Това е само
+observability; wire protocol, pacing и repair policy не се променят.
+
+### 0.1.18 same-room pure-LoRa acceptance
+
+Два Android bridge-а с `force_off`, broadcast, channel slot 1 и hop limit 0 са
+тествани в една стая. И двете посоки са отчетени като директен
+channel-encrypted LoRa път с 0 hops, без MQTT/MQTT→LoRa:
+
+- Honor TX 11 RNS frames/17 fragments съвпада точно с Pixel RX 11/17;
+- Pixel TX 15 RNS frames/24 fragments съвпада точно с Honor RX 15/24;
+- frame mix и byte totals също съвпадат точно в двете посоки: съответно
+  `5 data + 2 announce + 4 proof = 1937 B` и
+  `4 data + 7 announce + 4 proof = 2756 B`;
+- няма repair request, retransmit, incomplete assembly, duplicate, scheduler
+  reject, device reject, local retry или drop;
+- Android inbound spool е replay-нал две рамки след кратко прекъсване на
+  локалния Reticulum client, без radio retransmission или загуба.
+
+Това приема BLE/TCP PhoneAPI, port 76 framing/reassembly, `force_off` и
+broadcast reliability при идеален RF път. То едновременно потвърждава, че
+наблюдаваният ChUtil е реален bridge-carried RNS трафик: run-ът съдържа девет
+announce и осем proof рамки, общо 41 LoRa fragments. Следващата оптимизация не
+трябва да променя wire format или repair budget. Тя е constrained-link
+scheduling: proof/short-data преди announce, измерено announce shaping и
+queue-aware pacing. Honor firmware queue е достигнала peak 11/16 used без
+reject; това е сигнал за по-ранна soft backpressure, не доказана загуба.
+
+0.1.19 реализира тази ограничена scheduler стъпка зад обратим profile.
+`constrained_auto` класифицира всяка завършена изходяща RNS рамка преди legacy
+fragmentation: proof/link control е с висок приоритет, обикновените data рамки
+са normal, а announce е low. След четири завършени non-announce рамки се
+обслужва готов announce, за да няма starvation. Отделните announce рамки
+започват през поне 15 секунди; нито един различен announce не се изтрива,
+слива или променя. Firmware QueueStatus добавя soft delay преди изчерпване:
++1x/+2x/+3x от configured base interval при 25/50/75% occupancy, с максимум
++8 секунди. Това не променя Meshtastic duty cycle, RNS wire bytes,
+fragmentation, repair или ACK semantics. `transparent` връща 0.1.18
+FIFO/base-pacing поведението за директно A/B сравнение.
 
 ## Приоритет 1 — измерена delivery policy
 

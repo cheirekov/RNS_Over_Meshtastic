@@ -16,6 +16,8 @@ final class BridgeConfig {
     final int localPort;
     final int channel;
     final int hops;
+    final String mqttForwardingPolicy;
+    final String trafficProfile;
     final String mode;
     final String gateway;
     final String allowedSources;
@@ -27,7 +29,8 @@ final class BridgeConfig {
     BridgeConfig(
             String transport, String radioHost, int radioPort, String bleAddress, int localPort,
             int channel, int hops, String mode, String gateway, int fragmentBody,
-            int txIntervalMillis, String ackPolicy, String allowedSources) {
+            int txIntervalMillis, String ackPolicy, String allowedSources,
+            String mqttForwardingPolicy, String trafficProfile) {
         this.transport = transport;
         this.radioHost = radioHost;
         this.radioPort = radioPort;
@@ -35,6 +38,8 @@ final class BridgeConfig {
         this.localPort = localPort;
         this.channel = channel;
         this.hops = hops;
+        this.mqttForwardingPolicy = mqttForwardingPolicy;
+        this.trafficProfile = trafficProfile;
         this.mode = mode;
         this.gateway = gateway;
         this.allowedSources = allowedSources.trim();
@@ -62,7 +67,9 @@ final class BridgeConfig {
                 p.contains("ack_policy")
                         ? p.getString("ack_policy", "off")
                         : (p.getBoolean("want_ack", false) ? "critical" : "off"),
-                p.getString("allowed_sources", ""));
+                p.getString("allowed_sources", ""),
+                p.getString("mqtt_forwarding_policy", "inherit"),
+                p.getString("traffic_profile", "constrained_auto"));
     }
 
     void save(Context context) {
@@ -74,6 +81,8 @@ final class BridgeConfig {
                 .putInt("local_port", localPort)
                 .putInt("channel", channel)
                 .putInt("hops", hops)
+                .putString("mqtt_forwarding_policy", mqttForwardingPolicy)
+                .putString("traffic_profile", trafficProfile)
                 .putString("mode", mode)
                 .putString("gateway", gateway)
                 .putString("allowed_sources", allowedSources)
@@ -85,6 +94,10 @@ final class BridgeConfig {
     }
 
     String outboundDestination() { return mode.equals("broadcast") ? "^all" : gateway; }
+
+    boolean allowsMqttForwarding(boolean radioAllows) {
+        return mqttForwardingPolicy.equals("inherit") && radioAllows;
+    }
 
     boolean acceptsSource(String source) {
         if (!mode.equals("broadcast")) return source.equalsIgnoreCase(gateway);
@@ -110,10 +123,19 @@ final class BridgeConfig {
         if (radioPort < 1 || radioPort > 65535 || localPort < 1 || localPort > 65535) throw new IllegalArgumentException("Invalid TCP port");
         if (channel < 0 || channel > 7) throw new IllegalArgumentException("Channel index must be 0..7");
         if (hops < 0 || hops > 7) throw new IllegalArgumentException("Hop limit must be 0..7");
+        if (!mqttForwardingPolicy.equals("inherit")
+                && !mqttForwardingPolicy.equals("force_off")) {
+            throw new IllegalArgumentException("MQTT forwarding policy must be inherit or force_off");
+        }
+        if (!trafficProfile.equals("constrained_auto")
+                && !trafficProfile.equals("transparent")) {
+            throw new IllegalArgumentException("Traffic profile must be constrained_auto or transparent");
+        }
         if (!mode.equals("broadcast") && !mode.equals("gateway_unicast")) throw new IllegalArgumentException("Invalid mode");
         if (mode.equals("gateway_unicast")) NodeId.parse(gateway);
-        if (!ackPolicy.equals("off") && !ackPolicy.equals("critical") && !ackPolicy.equals("all")) {
-            throw new IllegalArgumentException("ACK policy must be off, critical or all");
+        if (!ackPolicy.equals("adaptive") && !ackPolicy.equals("off")
+                && !ackPolicy.equals("critical") && !ackPolicy.equals("all")) {
+            throw new IllegalArgumentException("ACK policy must be adaptive, off, critical or all");
         }
         if (fragmentBody < 1 || fragmentBody > 230) throw new IllegalArgumentException("Fragment body must be 1..230");
         if (txIntervalMillis < 0 || txIntervalMillis > 60_000) throw new IllegalArgumentException("TX interval must be 0..60000 ms");

@@ -9,7 +9,8 @@ public class BridgeConfigTest {
     private static BridgeConfig broadcast(String allowedSources) {
         return new BridgeConfig(
                 "tcp", "192.0.2.1", 4403, "", 7822,
-                0, 3, "broadcast", "", 200, 2000, "off", allowedSources);
+                0, 3, "broadcast", "", 200, 2000, "off", allowedSources,
+                "inherit", "constrained_auto");
     }
 
     @Test public void emptyBroadcastAllowlistAcceptsAnySource() {
@@ -26,6 +27,18 @@ public class BridgeConfigTest {
     @Test(expected = IllegalArgumentException.class)
     public void malformedBroadcastAllowlistIsRejected() {
         broadcast("not-a-node");
+    }
+
+    @Test public void mqttForwardingCanOnlyBeInheritedOrReduced() {
+        BridgeConfig inherited = broadcast("");
+        assertTrue(inherited.allowsMqttForwarding(true));
+        assertFalse(inherited.allowsMqttForwarding(false));
+
+        BridgeConfig forcedOff = new BridgeConfig(
+                "tcp", "192.0.2.1", 4403, "", 7822,
+                0, 3, "broadcast", "", 200, 2000, "off", "",
+                "force_off", "constrained_auto");
+        assertFalse(forcedOff.allowsMqttForwarding(true));
     }
 
     @Test public void criticalAckProtectsFinalAndRepairFragmentsOnly() {
@@ -45,6 +58,8 @@ public class BridgeConfigTest {
         assertFalse(BridgeEngine.requestsRadioAck("critical", only, false));
         assertTrue(BridgeEngine.requestsRadioAck("critical", request, false));
         assertTrue(BridgeEngine.requestsRadioAck("critical", retransmit, false));
+        assertTrue(BridgeEngine.requestsRadioAck("adaptive", retransmit, false));
+        assertTrue(BridgeEngine.requestsRadioAck("adaptive", last, false));
         assertTrue(BridgeEngine.requestsRadioAck("all", middle, false));
         assertFalse(BridgeEngine.requestsRadioAck("off", last, false));
     }

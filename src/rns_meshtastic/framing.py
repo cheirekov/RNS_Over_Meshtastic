@@ -13,7 +13,7 @@ import hashlib
 import struct
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -65,6 +65,8 @@ class FragmentProtocol:
         state_ttl: float = 180.0,
         request_cooldown: float = 5.0,
         max_repair_attempts: int = 3,
+        max_repair_requests_per_window: int = 12,
+        repair_window: float = 60.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if not 1 <= fragment_body <= 230:
@@ -73,16 +75,23 @@ class FragmentProtocol:
             raise ValueError("state_ttl and request_cooldown must be positive")
         if max_repair_attempts <= 0:
             raise ValueError("max_repair_attempts must be positive")
+        if max_repair_requests_per_window <= 0 or repair_window <= 0:
+            raise ValueError("repair request budget and window must be positive")
         self.fragment_body = fragment_body
         self.state_ttl = state_ttl
         self.request_cooldown = request_cooldown
         self.max_repair_attempts = max_repair_attempts
+        self.max_repair_requests_per_window = max_repair_requests_per_window
+        self.repair_window = repair_window
         self._clock = clock
         self._next_index = 0
         self._assemblies: dict[tuple[str, int], _Assembly] = {}
         self._tx_cache: OrderedDict[tuple[int, str], _CachedTx] = OrderedDict()
         self._completed: OrderedDict[tuple[str, int, bytes], float] = OrderedDict()
         self._completed_indices: OrderedDict[tuple[str, int], float] = OrderedDict()
+        self._repair_request_times: deque[float] = deque()
+        self.repair_requests = 0
+        self.repair_throttled = 0
         self._lock = threading.RLock()
 
     def encode(self, frame: bytes, destination: str) -> list[Transmission]:
@@ -113,20 +122,22 @@ class FragmentProtocol:
                 self._tx_cache.popitem(last=False)
             return transmissions
 
-    def receive(self, source: str, payload: bytes) -> ReceiveResult:
+    def receive(self, source: str, payload: bytes, *, allow_control: bool = True) -> ReceiveResult:
         if not source:
             raise FragmentError("source must not be empty")
         with self._lock:
             self._cleanup_locked()
             if payload.startswith(REQUEST_PREFIX):
+                if not allow_control:
+                    return ReceiveResult()
                 return self._handle_request_locked(source, payload[len(REQUEST_PREFIX) :])
-            return self._handle_fragment_locked(source, payload)
+            return self._handle_fragment_locked(source, payload, allow_control=allow_control)
 
     def cleanup(self) -> None:
         with self._lock:
             self._cleanup_locked()
 
-    def poll_repairs(self, max_requests: int = 1) -> ReceiveResult:
+    def poll_repairs(self, max_requests: int = 1, *, allow_control: bool = True) -> ReceiveResult:
         """Request stalled fragments with bounded exponential backoff."""
         if max_requests <= 0:
             return ReceiveResult()
@@ -148,6 +159,8 @@ class FragmentProtocol:
                 remaining = max_requests - len(result.transmissions)
                 if remaining <= 0:
                     break
+                if not allow_control:
+                    continue
                 self._append_repair_requests_locked(
                     result, source, index, assembly, missing, now, remaining, False
                 )
@@ -167,7 +180,9 @@ class FragmentProtocol:
             transmissions=[Transmission(source, cached.fragments[requested], reason="retransmit")]
         )
 
-    def _handle_fragment_locked(self, source: str, payload: bytes) -> ReceiveResult:
+    def _handle_fragment_locked(
+        self, source: str, payload: bytes, *, allow_control: bool
+    ) -> ReceiveResult:
         index, wire_position = self._parse_header(payload)
         position = abs(wire_position)
         if len(payload) == HEADER.size:
@@ -198,9 +213,10 @@ class FragmentProtocol:
 
         missing = [p for p in range(1, assembly.final_position + 1) if p not in assembly.fragments]
         if missing:
-            self._append_repair_requests_locked(
-                result, source, index, assembly, missing, now, 1, True
-            )
+            if allow_control:
+                self._append_repair_requests_locked(
+                    result, source, index, assembly, missing, now, 1, True
+                )
             return result
 
         frame = b"".join(assembly.fragments[p] for p in range(1, assembly.final_position + 1))
@@ -240,8 +256,14 @@ class FragmentProtocol:
                 due = now - last_request >= delay
             if not due:
                 continue
+            self._cleanup_repair_budget_locked(now)
+            if len(self._repair_request_times) >= self.max_repair_requests_per_window:
+                self.repair_throttled += 1
+                break
             request = REQUEST_PREFIX + HEADER.pack(index, missing_position)
             result.transmissions.append(Transmission(source, request, reason="request"))
+            self._repair_request_times.append(now)
+            self.repair_requests += 1
             assembly.requested_at[missing_position] = now
             assembly.request_attempts[missing_position] = attempts + 1
             budget -= 1
@@ -256,7 +278,9 @@ class FragmentProtocol:
         return index, position
 
     def _cleanup_locked(self) -> None:
-        cutoff = self._clock() - self.state_ttl
+        now = self._clock()
+        cutoff = now - self.state_ttl
+        self._cleanup_repair_budget_locked(now)
         for key, assembly in list(self._assemblies.items()):
             if assembly.updated_at < cutoff:
                 self._assemblies.pop(key, None)
@@ -273,3 +297,8 @@ class FragmentProtocol:
             if completed_at >= cutoff:
                 break
             self._completed_indices.pop(key, None)
+
+    def _cleanup_repair_budget_locked(self, now: float) -> None:
+        cutoff = now - self.repair_window
+        while self._repair_request_times and self._repair_request_times[0] <= cutoff:
+            self._repair_request_times.popleft()

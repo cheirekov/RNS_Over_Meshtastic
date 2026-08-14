@@ -59,6 +59,20 @@ final class DeviceQueueFlowControl {
 
     synchronized Snapshot snapshot() { return new Snapshot(known, free, max, result); }
 
+    /**
+     * Soft pacing before the firmware queue is exhausted. This never changes
+     * Meshtastic duty-cycle policy; it only stretches the bridge's next send.
+     */
+    synchronized long recommendedExtraDelayMillis(int baseIntervalMillis) {
+        if (!known || max < 4) return 0;
+        int used = Math.max(0, max - free);
+        long unit = Math.max(1_000, baseIntervalMillis);
+        if (used * 4 >= max * 3) return Math.min(8_000, unit * 3);
+        if (used * 2 >= max) return Math.min(8_000, unit * 2);
+        if (used * 4 >= max) return Math.min(8_000, unit);
+        return 0;
+    }
+
     synchronized void reset() {
         generation++;
         known = false;

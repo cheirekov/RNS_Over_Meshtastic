@@ -1,6 +1,7 @@
 package bg.reticulum.meshtastic.bridge;
 
 import android.content.Context;
+import android.os.SystemClock;
 
 import java.util.Collections;
 import java.util.List;
@@ -36,13 +37,18 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     private final AtomicLong fragmentsToMesh = new AtomicLong();
     private final AtomicLong fragmentsFromMesh = new AtomicLong();
     private final AtomicLong deviceRejects = new AtomicLong();
+    private final AtomicLong repairQueueDeferrals = new AtomicLong();
     private final AckTracker acknowledgements = new AckTracker();
+    private final AdaptiveAckPolicy adaptiveAck = new AdaptiveAckPolicy();
+    private final RnsTrafficTelemetry traffic = new RnsTrafficTelemetry();
     private final ScheduledExecutorService ackScheduler = Executors.newSingleThreadScheduledExecutor();
     private final Object ackScheduleLock = new Object();
     private ScheduledFuture<?> ackSweep;
     private volatile String radioState = "radio starting";
     private volatile String clientState = "Reticulum starting";
     private volatile String deviceQueueState = "device TX queue: unknown";
+    private volatile int deviceQueueMax;
+    private volatile int deviceQueueMinFree = Integer.MAX_VALUE;
     private volatile String lastDeviceReject = "none";
     private volatile String lastRxState = "none";
     private volatile String lastError = "";
@@ -64,6 +70,9 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                 config.txIntervalMillis,
                 MAX_QUEUED_FRAMES, maxQueuedFragments, maxQueuedBytes,
                 2, reservedControlFragments, reservedControlFragments * (config.fragmentBody + 2),
+                constrainedScheduling() ? 15_000 : 0,
+                () -> constrainedScheduling()
+                        ? radio.recommendedExtraDelayMillis(config.txIntervalMillis) : 0,
                 this::sendTransmission,
                 new TransmitScheduler.Listener() {
                     @Override public void onChanged(TransmitScheduler.Snapshot ignored) { publish(); }
@@ -106,17 +115,23 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
         boolean requireLocalDestination = config.mode.equals("gateway_unicast");
         if (!acceptsInbound(packet, config.channel, localNode, requireLocalDestination)) return;
         fragmentsFromMesh.incrementAndGet();
+        traffic.recordRadioRx(packet.payload.length, SystemClock.elapsedRealtime());
         lastRxState = describeInbound(packet, source);
         try {
-            FragmentProtocol.Result result = fragments.receive(source, packet.payload);
+            int possibleControlBytes = startsWith(packet.payload, FragmentProtocol.REQUEST_PREFIX)
+                    ? config.fragmentBody + 2 : FragmentProtocol.REQUEST_PREFIX.length + 2;
+            boolean allowControl = transmit.canAcceptControl(1, possibleControlBytes);
+            FragmentProtocol.Result result = fragments.receive(source, packet.payload, allowControl);
+            if (result.controlDeferred) repairQueueDeferrals.incrementAndGet();
             for (byte[] frame : result.frames) {
+                traffic.recordFrame(false, frame);
                 ReticulumTcpServer.Delivery delivery = reticulum.sendFrame(frame);
                 if (delivery == ReticulumTcpServer.Delivery.REJECTED) {
                     reportError("Inbound RNS spool full; dropped completed frame from " + source);
                 }
             }
             if (!queueRepairTransmissions(result.transmissions)) {
-                reportError("Meshtastic repair queue full; periodic retry will continue");
+                repairQueueDeferrals.incrementAndGet();
             }
             publish();
         } catch (Exception error) {
@@ -147,7 +162,13 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     @Override public void onFrame(byte[] frame) {
         try {
             List<FragmentProtocol.Transmission> transmissions = fragments.encode(frame, config.outboundDestination());
-            if (queueTransmissions(transmissions, true)) rnsToMesh.incrementAndGet();
+            int priority = constrainedScheduling()
+                    ? RnsTrafficTelemetry.schedulerPriority(frame)
+                    : TransmitScheduler.PRIORITY_NORMAL;
+            if (queueTransmissions(transmissions, true, priority)) {
+                rnsToMesh.incrementAndGet();
+                traffic.recordFrame(true, frame);
+            }
             publish();
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -157,9 +178,10 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     }
 
     private boolean queueTransmissions(
-            List<FragmentProtocol.Transmission> transmissions, boolean waitForCapacity)
+            List<FragmentProtocol.Transmission> transmissions, boolean waitForCapacity,
+            int priority)
             throws InterruptedException {
-        return transmit.enqueue(transmissions, waitForCapacity);
+        return transmit.enqueue(transmissions, waitForCapacity, priority);
     }
 
     private boolean queueRepairTransmissions(
@@ -177,9 +199,14 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
         }
         boolean requestAck = requestsRadioAck(
                 config.ackPolicy, transmission, config.mode.equals("broadcast"));
+        if (requestAck && config.ackPolicy.equals("adaptive")) {
+            requestAck = adaptiveAck.permits(acknowledgements.snapshot());
+        }
         long packetId = radio.send(
                 transmission.payload, NodeId.parse(transmission.destination), requestAck);
         fragmentsToMesh.incrementAndGet();
+        traffic.recordRadioTx(
+                transmission.reason, transmission.payload.length, SystemClock.elapsedRealtime());
         if (requestAck) {
             acknowledgements.sent(packetId, transmission.destination);
             scheduleAckSweep();
@@ -198,12 +225,17 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     }
 
     @Override public void onQueueStatus(int free, int max, int result) {
+        if (max > 0) {
+            deviceQueueMax = Math.max(deviceQueueMax, max);
+            deviceQueueMinFree = Math.min(deviceQueueMinFree, free);
+        }
         if (result != 0) {
             lastDeviceReject = routingErrorName(result) + " (" + result + ")";
             deviceRejects.incrementAndGet();
             lastError = "Meshtastic device rejected TX: " + lastDeviceReject;
         }
         deviceQueueState = "device TX queue: " + free + "/" + max + " free"
+                + "; peak used: " + deviceQueuePeakUsed() + "/" + deviceQueueMax
                 + "; rejects: " + deviceRejects.get() + ", last: " + lastDeviceReject;
         publish();
     }
@@ -213,21 +245,35 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
         FragmentProtocol.Snapshot reassembly = fragments.snapshot();
         ReticulumTcpServer.Snapshot client = reticulum.snapshot();
         AckTracker.Snapshot ack = acknowledgements.snapshot();
-        long dropped = queue.rejectedFrames + queue.failedFrames;
+        RnsTrafficTelemetry.Snapshot trafficSnapshot = traffic.snapshot(SystemClock.elapsedRealtime());
+        long dropped = queue.dataRejectedFrames + queue.dataFailedFrames;
         String summary =
                 radioState + "\n" + clientState
                         + "\ntopology: " + topologySummary() + ", local channel slot: " + config.channel
+                        + "\nMQTT forwarding: " + config.mqttForwardingPolicy + " → "
+                        + (radio.mqttForwardingAllowed() ? "allowed" : "denied")
+                        + "\ntraffic scheduling: " + config.trafficProfile
                         + "\nTX RNS→mesh: " + rnsToMesh.get() + " frames / "
                         + fragmentsToMesh.get() + " fragments"
                         + "\nRX mesh→bridge: " + reassembly.completedFrames + " frames / "
                         + fragmentsFromMesh.get() + " fragments; last: " + lastRxState
+                        + "\n" + trafficSnapshot.frameMix
+                        + "\n" + trafficSnapshot.radioWindow
                         + "\nradio queue: " + queue.frames + " frames, " + queue.fragments
                         + "/" + maxQueuedFragments + " fragments, " + queue.bytes
                         + "/" + maxQueuedBytes + " bytes"
                         + ", drain ≈" + formatDuration(queue.estimatedDrainMillis)
+                        + "; peak: " + queue.peakFrames + " frames/"
+                        + queue.peakFragments + " fragments/" + queue.peakBytes + " bytes"
                         + "\n" + deviceQueueState
                         + "; backpressure: " + queue.backpressureEvents
                         + ", local retries: " + queue.retryAttempts + ", dropped: " + dropped
+                        + "\nscheduler policy: high/normal/announce "
+                        + queue.highPriorityFrames + "/" + queue.normalPriorityFrames + "/"
+                        + queue.announcePriorityFrames + " frames; announce waits "
+                        + queue.announcePacingWaits + "; adaptive pacing "
+                        + queue.adaptivePacingEvents + " events, last +"
+                        + queue.currentExtraDelayMillis + " ms"
                         + "\nRNS client delivery: " + client.deliveredTotal() + " frames ("
                         + client.deliveredDirect + " direct, " + client.spool.replayedFrames
                         + " replayed); inbound spool: " + client.spool.frames + "/"
@@ -246,11 +292,19 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                         + reassembly.cappedRepairs + ", expired: "
                         + reassembly.expiredAssemblies + ", duplicates: "
                         + reassembly.duplicateFrames
-                        + "\nadmission: " + queue.rejectedFrames + " rejected, "
-                        + queue.failedFrames + " send-failed; last reject: "
+                        + "\nrepair flow: " + reassembly.repairBudgetUsed + "/"
+                        + reassembly.repairBudgetLimit + " requests in rolling minute; throttled: "
+                        + reassembly.throttledRepairs + ", queue-deferred: "
+                        + repairQueueDeferrals.get()
+                        + "\nadmission: data " + queue.dataRejectedFrames + " rejected/"
+                        + queue.dataFailedFrames + " send-failed; control "
+                        + queue.controlRejectedFrames + " rejected/"
+                        + queue.controlFailedFrames + " send-failed; last reject: "
                         + queue.lastRejection;
         if (!config.ackPolicy.equals("off") && !config.mode.equals("broadcast")) {
-            summary += "\nradio ACK (" + config.ackPolicy + "): "
+            String ackMode = config.ackPolicy.equals("adaptive")
+                    ? "adaptive; " + adaptiveAck.describe(ack) : config.ackPolicy;
+            summary += "\nradio ACK (" + ackMode + "): "
                     + ack.confirmed + " confirmed, " + ack.failed
                     + " NAK, " + ack.unknown + " unknown, " + ack.pending
                     + " pending; last: " + ack.lastResult;
@@ -279,6 +333,15 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     }
 
     private String localNodeLabel() { return localNode == 0 ? "local identity pending" : NodeId.format(localNode); }
+
+    private boolean constrainedScheduling() {
+        return config.trafficProfile.equals("constrained_auto");
+    }
+
+    private int deviceQueuePeakUsed() {
+        if (deviceQueueMax <= 0 || deviceQueueMinFree == Integer.MAX_VALUE) return 0;
+        return Math.max(0, deviceQueueMax - deviceQueueMinFree);
+    }
 
     private static String describeInbound(ProtoCodec.RadioPacket packet, String source) {
         StringBuilder result = new StringBuilder(source)
@@ -311,6 +374,7 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
         if (broadcastMode) return false;
         if (transmission.destination.equals("^all") || policy.equals("off")) return false;
         if (policy.equals("all")) return true;
+        if (policy.equals("adaptive")) policy = "critical";
         if (!policy.equals("critical")) throw new IllegalArgumentException("unknown ACK policy " + policy);
         if (transmission.reason.equals("request") || transmission.reason.equals("retransmit")) return true;
         byte[] payload = transmission.payload;
@@ -335,10 +399,17 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     private void pollFragmentRepairs() {
         if (closed) return;
         try {
-            FragmentProtocol.Result result = fragments.pollRepairs(1);
+            int requestBytes = FragmentProtocol.REQUEST_PREFIX.length + 2;
+            FragmentProtocol.Result result = fragments.pollRepairs(
+                    1, transmit.canAcceptControl(1, requestBytes));
+            if (result.controlDeferred) {
+                repairQueueDeferrals.incrementAndGet();
+                publish();
+                return;
+            }
             if (result.transmissions.isEmpty()) return;
             if (!queueRepairTransmissions(result.transmissions)) {
-                reportError("Meshtastic periodic repair queue full; repair delayed");
+                repairQueueDeferrals.incrementAndGet();
             } else publish();
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -395,6 +466,14 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
             case 39 -> "PKI_SEND_FAIL_PUBLIC_KEY";
             default -> "UNKNOWN";
         };
+    }
+
+    private static boolean startsWith(byte[] value, byte[] prefix) {
+        if (value.length < prefix.length) return false;
+        for (int i = 0; i < prefix.length; i++) {
+            if (value[i] != prefix[i]) return false;
+        }
+        return true;
     }
 
     private static String useful(Exception error) {

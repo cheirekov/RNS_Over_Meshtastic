@@ -71,6 +71,38 @@ spent. Broadcast mode never requests Meshtastic radio ACKs, including for its
 unicast repair control packets; otherwise firmware retries and protocol repair
 can amplify each other when the reverse path is unavailable.
 
+Version 0.1.16 adds congestion containment across all incomplete frames. Repair
+requests share a 12-per-minute rolling budget, a full control queue defers a
+repair without spending one of its three attempts, and the scheduler alternates
+waiting repair control with normal data. Status now separates data loss from
+control admission and exposes repair throttling/deferral. The optional
+`adaptive` radio ACK policy starts with the sparse `critical` selection and
+backs off for five minutes after 12 unconfirmed pending ACKs or a resolved
+confirmation rate below 25%; Reticulum/LXMF proofs remain authoritative. Use
+**Copy diagnostics** to copy a timestamped, versioned status report for field
+tests.
+
+Version 0.1.17 adds an `inherit / force_off` MQTT forwarding policy for bridge
+packets. `inherit` preserves the radio owner's `config_ok_to_mqtt`; `force_off`
+omits the packet permission even when the radio allows it. The bridge never
+offers `force_on`. Status reports both the configured and effective policy and
+retains bridge/device queue high-water marks until restart. Linux native
+PhoneAPI uses the same `mqtt_forwarding_policy` values.
+
+Version 0.1.18 adds secret-free Reticulum packet-type counters and a rolling
+60-second radio fragment/byte window. It does not change fragmentation,
+scheduling, ACK policy or the port 76 wire format; it makes background
+announce/proof/link traffic distinguishable from user data and repair traffic.
+
+Version 0.1.19 adds the default `constrained_auto` traffic profile. Proof and
+link-control frames pre-empt normal data, normal data pre-empts announcements,
+and one ready announcement is still served after four non-announce frames to
+avoid starvation. Distinct announce frames are started at least 15 seconds
+apart, but are not semantically discarded or rewritten. PhoneAPI queue
+occupancy adds 0/1x/2x/3x of the configured base interval before the next
+fragment at the 0/25/50/75% queue thresholds, capped at eight seconds. Select
+`transparent` for an immediate rollback to FIFO/base-pacing behaviour.
+
 ## Reproducible build
 
 No Android SDK or Gradle installation is required on the host:

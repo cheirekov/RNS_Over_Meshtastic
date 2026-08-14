@@ -133,4 +133,52 @@ public class FragmentProtocolTest {
                 new byte[] {'R', 'E', 'Q', tx.get(0).payload[0], 2},
                 progressed.transmissions.get(0).payload);
     }
+
+    @Test public void globalRepairBudgetThrottlesAStormAndRecoversAfterWindow() {
+        AtomicLong now = new AtomicLong(100_000);
+        FragmentProtocol sender = new FragmentProtocol(10, 300_000, 1_000, now::get);
+        FragmentProtocol receiver = new FragmentProtocol(
+                10, 300_000, 1_000, now::get, 2, 60_000);
+
+        for (int i = 0; i < 3; i++) {
+            FragmentProtocol.Transmission first = sender.encode(
+                    ("incomplete-frame-" + i).getBytes(), "^all").get(0);
+            receiver.receive("!abcdef01", first.payload);
+        }
+        now.addAndGet(1_001);
+
+        assertEquals(1, receiver.pollRepairs(1).transmissions.size());
+        assertEquals(1, receiver.pollRepairs(1).transmissions.size());
+        assertEquals(0, receiver.pollRepairs(1).transmissions.size());
+        FragmentProtocol.Snapshot limited = receiver.snapshot();
+        assertEquals(2, limited.repairBudgetUsed);
+        assertEquals(2, limited.repairBudgetLimit);
+        assertTrue(limited.throttledRepairs > 0);
+
+        now.addAndGet(60_001);
+        assertEquals(1, receiver.pollRepairs(1).transmissions.size());
+        assertEquals(1, receiver.snapshot().repairBudgetUsed);
+    }
+
+    @Test public void cappedMissingAssemblyStaysIncompleteInsteadOfThrowing() {
+        AtomicLong now = new AtomicLong(100_000);
+        FragmentProtocol sender = new FragmentProtocol(10, 300_000, 1_000, now::get);
+        FragmentProtocol receiver = new FragmentProtocol(10, 300_000, 1_000, now::get);
+        List<FragmentProtocol.Transmission> tx = sender.encode(
+                "0123456789abcdefghijKLMNO".getBytes(), "^all");
+        receiver.receive("!abcdef01", tx.get(0).payload);
+        receiver.receive("!abcdef01", tx.get(tx.size() - 1).payload);
+
+        for (long delay : new long[] {2_001, 4_001}) {
+            now.addAndGet(delay);
+            receiver.pollRepairs(1);
+        }
+        now.addAndGet(8_001);
+        receiver.pollRepairs(1);
+
+        FragmentProtocol.Result duplicateFinal = receiver.receive(
+                "!abcdef01", tx.get(tx.size() - 1).payload);
+        assertEquals(0, duplicateFinal.frames.size());
+        assertEquals(1, receiver.snapshot().activeAssemblies);
+    }
 }

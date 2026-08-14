@@ -10,8 +10,8 @@ android {
         applicationId = "bg.reticulum.meshtastic.bridge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.1.15"
+        versionCode = 20
+        versionName = "0.1.19"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -25,6 +25,10 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     testOptions {

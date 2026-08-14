@@ -462,6 +462,81 @@ status. Това позволява да сравним radio ACK с крайн�
 Не сравнявайте файлове, докато short-message тестът не е записан и в двете
 посоки.
 
+### Фаза D — 0.1.16 bounded-congestion regression
+
+Този тест проверява containment, а не максимална пропускателна способност. Не
+създавайте нарочно 50% channel utilization. Инсталирайте 0.1.16 и на двата
+телефона, използвайте reciprocal `gateway_unicast`, ACK policy `adaptive`, 200
+bytes и 2000 ms. При празни queues изпратете `A1`, след около 5 секунди `B1`,
+после `A2` и `B2` със същия интервал. Прекратете серията при 25% ChUtil.
+
+След поне 120 секунди без нов трафик натиснете **Copy diagnostics** на двата
+bridge-а. При слаб/асиметричен път е допустимо LXMF proof да закъснее или да
+липсва, но следните transport invariants трябва да останат верни:
+
+- `repair flow` не надхвърля `12/12 requests in rolling minute`; `throttled`
+  може да расте, без да се създава неограничена REQ буря;
+- `queue-deferred` може да расте при пълна queue, но не изразходва repair опит;
+- `admission: data ...` остава отделно от `control ...`; control reject вече не
+  се отчита като изгубен RNS data frame;
+- при лош ACK return path `radio ACK (adaptive; suppressed ...)` спира да товари
+  ефира за пет минути; това не означава LXMF failure;
+- след изчакването radio queue и device TX queue трябва да се изпразнят.
+
+### Фаза E — доказуем pure-LoRa с 0.1.18
+
+Тази фаза се прави отделно от adaptive congestion теста. На двата Android
+bridge-а задайте `MQTT forwarding permission for bridge packets = force_off`
+и ACK policy `off`, натиснете **Save & start** и проверете преди изпращане:
+
+```text
+MQTT forwarding: force_off → denied
+```
+
+Настройката не променя radio MQTT module, channel uplink/downlink или
+`config_ok_to_mqtt`; тя само премахва OK-to-MQTT разрешението от port 76
+пакетите на bridge-а. Изпратете един кратък текст A→B, изчакайте queue да се
+изпразни, после един B→A. Приетите port 76 пакети трябва да показват `LoRa`, а
+не `MQTT` или `MQTT→LoRa`. Ако едната посока не мине, върнете `inherit`; това е
+доказателство, че работещият маршрут зависи от MQTT gateway, а не причина да се
+увеличава duty cycle или repair budget.
+
+Новият `peak` на radio queue и `peak used` на device queue остават видими до
+рестарт. Копирайте diagnostics след теста, дори текущите queues вече да са
+празни. `RNS frame mix` показва дали bridge-ът е пренесъл data, announce, link
+или proof рамки, а `radio activity (last 60s)` показва действително изпратените
+data/repair Meshtastic фрагменти в същия rolling прозорец като ChUtil.
+
+За контролиран idle baseline стартирайте първо само bridge-а без
+Sideband/Columba, изчакайте 70 секунди и копирайте diagnostics. Очакването е
+`TX 0 fragments/0 B` за последните 60 секунди. После свържете Reticulum клиента,
+без announce или чат, изчакайте нови 70 секунди и копирайте втори report. Ако
+тогава TX вече не е нула, трафикът е генериран от Reticulum клиента/неговата
+локална RNS instance, а не от BLE, TCP PhoneAPI или чужд Meshtastic трафик.
+
+### Фаза F — 0.1.19 constrained scheduler A/B
+
+Повторете same-room pure-LoRa setup от Фаза E с `constrained_auto` на двата
+bridge-а. Оставете body 200, base interval 2000 ms, hop 0, broadcast, ACK off и
+`force_off`. Един announce от всеки клиент е достатъчен; не изтривайте
+контактите. След това изпратете един кратък текст A→B и един B→A, без burst.
+
+Диагностиката трябва да показва `traffic scheduling: constrained_auto` и
+`scheduler policy: high/normal/announce ...`. Distinct announce frames се
+стартират през поне 15 секунди, но proof или normal data могат да ги изпреварят.
+`adaptive pacing ... last +N ms` може да стане ненулево при firmware queue
+occupancy; това е scheduler delay, не Meshtastic duty-cycle override. Acceptance:
+
+- frame/fragment mix на TX край съвпада с RX на отсрещния край;
+- няма data/control reject, local retry, repair или expired assembly;
+- `peak used` е по-нисък от 0.1.18 baseline 11/16 или поне не достига full;
+- краткият текст и proof не чакат зад цял announce burst.
+
+При regression изберете `transparent` на двата bridge-а. Той запазва новата
+диагностика, но изключва priority ordering, 15-second announce spacing и soft
+QueueStatus pacing, тоест дава пряко сравнение със scheduler поведението на
+0.1.18.
+
 ## След успешния първи тест
 
 Преди по-дълго използване:
@@ -473,6 +548,6 @@ status. Това позволява да сравним radio ACK с крайн�
 3. Ограничете LoRa hub-а с `allowed_nodes = !a1b3b3b8`.
 4. Оставете Meshtastic ACK изключен при първото измерване; включвайте го само
    ако измерените загуби го налагат, защото всеки ACK увеличава airtime.
-5. За чист LoRa тест временно изключете само MQTT на `!8fd13c64`, без да
-   изключвате Wi-Fi/TCP PhoneAPI на радиото. На Phone A изключете Wi-Fi и mobile
-   data, но оставете Bluetooth. След двупосочен LXMF тест върнете MQTT.
+5. За чист LoRa тест използвайте `force_off` на bridge packet-ите. Самото
+   изключване на MQTT client на крайното radio не спира друг gateway да uplink-не
+   packet с OK-to-MQTT permission. След теста върнете `inherit`.

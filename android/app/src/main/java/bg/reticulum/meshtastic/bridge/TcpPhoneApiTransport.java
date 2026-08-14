@@ -129,7 +129,7 @@ final class TcpPhoneApiTransport implements RadioTransport {
         byte[] message = ProtoCodec.toRadioPacket(
                 localNode, destination, id, config.channel, config.hops,
                 wantAck && destination != NodeId.BROADCAST,
-                mqttUplinkPermitted, payload);
+                mqttForwardingAllowed(), payload);
         if (!deviceQueue.acquire(45_000)) throw new IllegalStateException("Meshtastic device TX queue unavailable or full for 45 seconds");
         try {
             synchronized (writeLock) { writePhoneApi(message); }
@@ -141,6 +141,14 @@ final class TcpPhoneApiTransport implements RadioTransport {
     }
 
     @Override public boolean isReady() { return localNode != 0; }
+
+    @Override public boolean mqttForwardingAllowed() {
+        return config.allowsMqttForwarding(mqttUplinkPermitted);
+    }
+
+    @Override public long recommendedExtraDelayMillis(int baseIntervalMillis) {
+        return deviceQueue.recommendedExtraDelayMillis(baseIntervalMillis);
+    }
 
     private void sendHeartbeat() {
         if (closed || output == null) return;

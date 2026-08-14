@@ -11,6 +11,8 @@ import android.bluetooth.le.ScanFilter;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -31,7 +33,10 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,6 +52,8 @@ public final class MainActivity extends Activity {
     private EditText localPort;
     private EditText channel;
     private EditText hops;
+    private Spinner mqttForwardingPolicy;
+    private Spinner trafficProfile;
     private Spinner mode;
     private EditText gateway;
     private EditText allowedSources;
@@ -104,6 +111,10 @@ public final class MainActivity extends Activity {
         add(form, "Meshtastic channel index (HQ = 0)", channel);
         hops = text("3", true);
         add(form, "Hop limit", hops);
+        mqttForwardingPolicy = spinner(new String[] {"inherit", "force_off"});
+        add(form, "MQTT forwarding permission for bridge packets", mqttForwardingPolicy);
+        trafficProfile = spinner(new String[] {"constrained_auto", "transparent"});
+        add(form, "LoRa traffic scheduling profile", trafficProfile);
         mode = spinner(new String[] {"gateway_unicast", "broadcast"});
         add(form, "Radio addressing mode", mode);
         gateway = text("!8fd13c64", false);
@@ -114,7 +125,7 @@ public final class MainActivity extends Activity {
         add(form, "Fragment payload bytes", fragmentBody);
         txInterval = text("2000", true);
         add(form, "Global delay between Meshtastic transmissions (ms)", txInterval);
-        ackPolicy = spinner(new String[] {"off", "critical", "all (diagnostic only)"});
+        ackPolicy = spinner(new String[] {"adaptive", "off", "critical", "all (diagnostic only)"});
         add(form, "Meshtastic radio ACK policy (not an LXMF receipt)", ackPolicy);
 
         LinearLayout buttons = new LinearLayout(this);
@@ -133,6 +144,11 @@ public final class MainActivity extends Activity {
         backgroundSettings.setText("Open background / battery settings");
         backgroundSettings.setOnClickListener(ignored -> openBackgroundSettings());
         form.addView(backgroundSettings);
+
+        Button copyDiagnostics = new Button(this);
+        copyDiagnostics.setText("Copy diagnostics");
+        copyDiagnostics.setOnClickListener(ignored -> copyDiagnostics());
+        form.addView(copyDiagnostics);
 
         status = new TextView(this);
         status.setText("Bridge is not running");
@@ -169,6 +185,8 @@ public final class MainActivity extends Activity {
         localPort.setText(String.valueOf(config.localPort));
         channel.setText(String.valueOf(config.channel));
         hops.setText(String.valueOf(config.hops));
+        select(mqttForwardingPolicy, config.mqttForwardingPolicy);
+        select(trafficProfile, config.trafficProfile);
         select(mode, config.mode);
         gateway.setText(config.gateway);
         allowedSources.setText(config.allowedSources);
@@ -189,7 +207,8 @@ public final class MainActivity extends Activity {
                     selectedTransport.equals("tcp") ? integer(radioPort) : 4403,
                     selectedTransport.equals("ble") ? value(bleAddress) : "",
                     integer(localPort), integer(channel), integer(hops), selected(mode), value(gateway),
-                    integer(fragmentBody), integer(txInterval), ackPolicyValue(), value(allowedSources));
+                    integer(fragmentBody), integer(txInterval), ackPolicyValue(), value(allowedSources),
+                    selected(mqttForwardingPolicy), selected(trafficProfile));
             if (!ensurePermissions(config)) return;
             config.save(this);
             Intent service = new Intent(this, BridgeService.class).setAction(BridgeService.ACTION_START);
@@ -367,6 +386,23 @@ public final class MainActivity extends Activity {
         } catch (Exception error) {
             startActivity(new Intent(Settings.ACTION_SETTINGS));
         }
+    }
+
+    private void copyDiagnostics() {
+        String report = DiagnosticsReport.create(
+                OffsetDateTime.now().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                BuildConfig.VERSION_NAME,
+                BuildConfig.VERSION_CODE,
+                Build.MANUFACTURER + " " + Build.MODEL,
+                Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")",
+                status.getText().toString());
+        ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+        if (clipboard == null) {
+            Toast.makeText(this, "Clipboard is unavailable", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText("Bridge diagnostics", report));
+        Toast.makeText(this, "Diagnostics copied", Toast.LENGTH_SHORT).show();
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }

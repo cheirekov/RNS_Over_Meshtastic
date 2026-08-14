@@ -5,7 +5,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.ArrayDeque;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -31,6 +33,7 @@ final class FragmentProtocol {
     static final class Result {
         final List<byte[]> frames = new ArrayList<>();
         final List<Transmission> transmissions = new ArrayList<>();
+        boolean controlDeferred;
     }
 
     static final class Snapshot {
@@ -42,13 +45,17 @@ final class FragmentProtocol {
         final long repairRequests;
         final long finalRepairRequests;
         final int cappedRepairs;
+        final int repairBudgetUsed;
+        final int repairBudgetLimit;
+        final long throttledRepairs;
         final long retransmissions;
         final long expiredAssemblies;
 
         Snapshot(
                 int activeAssemblies, int awaitingFinal, int missingFragments,
                 long completedFrames, long duplicateFrames, long repairRequests, long finalRepairRequests,
-                int cappedRepairs, long retransmissions, long expiredAssemblies) {
+                int cappedRepairs, int repairBudgetUsed, int repairBudgetLimit,
+                long throttledRepairs, long retransmissions, long expiredAssemblies) {
             this.activeAssemblies = activeAssemblies;
             this.awaitingFinal = awaitingFinal;
             this.missingFragments = missingFragments;
@@ -57,6 +64,9 @@ final class FragmentProtocol {
             this.repairRequests = repairRequests;
             this.finalRepairRequests = finalRepairRequests;
             this.cappedRepairs = cappedRepairs;
+            this.repairBudgetUsed = repairBudgetUsed;
+            this.repairBudgetLimit = repairBudgetLimit;
+            this.throttledRepairs = throttledRepairs;
             this.retransmissions = retransmissions;
             this.expiredAssemblies = expiredAssemblies;
         }
@@ -91,6 +101,11 @@ final class FragmentProtocol {
     private final long requestCooldownMillis;
     private final LongSupplier clock;
     private static final int MAX_REPAIR_ATTEMPTS = 3;
+    private static final int DEFAULT_REPAIR_BUDGET = 12;
+    private static final long DEFAULT_REPAIR_WINDOW_MILLIS = 60_000;
+    private final int repairBudgetLimit;
+    private final long repairWindowMillis;
+    private final Deque<Long> repairWindow = new ArrayDeque<>();
     private int nextIndex;
     private final Map<String, Assembly> assemblies = new HashMap<>();
     private final LinkedHashMap<String, CachedTx> txCache = new LinkedHashMap<>();
@@ -100,6 +115,7 @@ final class FragmentProtocol {
     private long duplicateFrames;
     private long repairRequests;
     private long finalRepairRequests;
+    private long throttledRepairs;
     private long retransmissions;
     private long expiredAssemblies;
 
@@ -111,11 +127,23 @@ final class FragmentProtocol {
 
     FragmentProtocol(
             int bodySize, long ttlMillis, long requestCooldownMillis, LongSupplier clock) {
+        this(bodySize, ttlMillis, requestCooldownMillis, clock,
+                DEFAULT_REPAIR_BUDGET, DEFAULT_REPAIR_WINDOW_MILLIS);
+    }
+
+    FragmentProtocol(
+            int bodySize, long ttlMillis, long requestCooldownMillis, LongSupplier clock,
+            int repairBudgetLimit, long repairWindowMillis) {
         if (bodySize < 1 || bodySize > 230) throw new IllegalArgumentException("fragment body must be 1..230 bytes");
+        if (repairBudgetLimit < 1 || repairWindowMillis < 1) {
+            throw new IllegalArgumentException("repair budget and window must be positive");
+        }
         this.bodySize = bodySize;
         this.ttlMillis = ttlMillis;
         this.requestCooldownMillis = requestCooldownMillis;
         this.clock = clock;
+        this.repairBudgetLimit = repairBudgetLimit;
+        this.repairWindowMillis = repairWindowMillis;
     }
 
     synchronized List<Transmission> encode(byte[] frame, String destination) {
@@ -142,8 +170,14 @@ final class FragmentProtocol {
     }
 
     synchronized Result receive(String source, byte[] payload) {
+        return receive(source, payload, true);
+    }
+
+    synchronized Result receive(String source, byte[] payload, boolean allowControl) {
         cleanup();
-        if (startsWith(payload, REQUEST_PREFIX)) return handleRequest(source, payload);
+        if (startsWith(payload, REQUEST_PREFIX)) {
+            return handleRequest(source, payload, allowControl);
+        }
         if (payload.length < 3) throw new IllegalArgumentException("fragment is truncated or empty");
         int index = payload[0] & 0xff;
         int wirePosition = payload[1];
@@ -173,8 +207,15 @@ final class FragmentProtocol {
 
         Result result = new Result();
         if (assembly.last == null) return result;
-        appendRepairRequests(result, assembly, missingPositions(assembly), now, 1, true);
-        if (!result.transmissions.isEmpty()) return result;
+        List<Integer> missing = missingPositions(assembly);
+        if (!missing.isEmpty()) {
+            if (allowControl) appendRepairRequests(result, assembly, missing, now, 1, true);
+            else if (hasDueRepair(assembly, missing, now, true)) {
+                if (repairWindow.size() >= repairBudgetLimit) throttledRepairs++;
+                else result.controlDeferred = true;
+            }
+            return result;
+        }
 
         ByteArrayOutputStream frame = new ByteArrayOutputStream();
         for (int p = 1; p <= assembly.last; p++) {
@@ -194,6 +235,10 @@ final class FragmentProtocol {
     }
 
     synchronized Result pollRepairs(int maxRequests) {
+        return pollRepairs(maxRequests, true);
+    }
+
+    synchronized Result pollRepairs(int maxRequests, boolean allowControl) {
         cleanup();
         long now = now();
         Result result = new Result();
@@ -202,6 +247,14 @@ final class FragmentProtocol {
             if (now - assembly.updated < requestCooldownMillis) continue;
             List<Integer> missing = assembly.last == null
                     ? Collections.singletonList(0) : missingPositions(assembly);
+            if (!allowControl) {
+                if (hasDueRepair(assembly, missing, now, false)) {
+                    if (repairWindow.size() >= repairBudgetLimit) throttledRepairs++;
+                    else result.controlDeferred = true;
+                    return result;
+                }
+                continue;
+            }
             appendRepairRequests(
                     result, assembly, missing, now,
                     maxRequests - result.transmissions.size(), false);
@@ -210,7 +263,7 @@ final class FragmentProtocol {
         return result;
     }
 
-    private Result handleRequest(String source, byte[] payload) {
+    private Result handleRequest(String source, byte[] payload, boolean allowControl) {
         Result result = new Result();
         if (payload.length < 5) return result;
         int index = payload[3] & 0xff;
@@ -221,8 +274,10 @@ final class FragmentProtocol {
             position = cached.fragments.keySet().stream().mapToInt(Integer::intValue).max().orElse(0);
         }
         if (cached != null && cached.fragments.containsKey(position)) {
-            result.transmissions.add(new Transmission(source, cached.fragments.get(position), "retransmit"));
-            retransmissions++;
+            if (allowControl) {
+                result.transmissions.add(new Transmission(source, cached.fragments.get(position), "retransmit"));
+                retransmissions++;
+            } else result.controlDeferred = true;
         }
         return result;
     }
@@ -242,13 +297,11 @@ final class FragmentProtocol {
         for (int position : missing) {
             if (budget <= 0) break;
             int attempts = assembly.requestAttempts.getOrDefault(position, 0);
-            if (attempts >= MAX_REPAIR_ATTEMPTS) continue;
-            long lastRequest = assembly.requested.getOrDefault(position, 0L);
-            long delay = requestCooldownMillis * (1L << attempts);
-            boolean due = attempts == 0
-                    ? immediate || now - assembly.updated >= requestCooldownMillis
-                    : now - lastRequest >= delay;
-            if (!due) continue;
+            if (!repairDue(assembly, position, attempts, now, immediate)) continue;
+            if (!takeRepairBudget(now)) {
+                throttledRepairs++;
+                break;
+            }
             result.transmissions.add(new Transmission(
                     assembly.source,
                     new byte[] {'R', 'E', 'Q', (byte) assembly.index, (byte) position},
@@ -259,6 +312,25 @@ final class FragmentProtocol {
             if (position == 0) finalRepairRequests++;
             budget--;
         }
+    }
+
+    private boolean hasDueRepair(
+            Assembly assembly, List<Integer> missing, long current, boolean immediate) {
+        for (int position : missing) {
+            int attempts = assembly.requestAttempts.getOrDefault(position, 0);
+            if (repairDue(assembly, position, attempts, current, immediate)) return true;
+        }
+        return false;
+    }
+
+    private boolean repairDue(
+            Assembly assembly, int position, int attempts, long current, boolean immediate) {
+        if (attempts >= MAX_REPAIR_ATTEMPTS) return false;
+        long lastRequest = assembly.requested.getOrDefault(position, 0L);
+        long delay = requestCooldownMillis * (1L << attempts);
+        return attempts == 0
+                ? immediate || current - assembly.updated >= requestCooldownMillis
+                : current - lastRequest >= delay;
     }
 
     synchronized Snapshot snapshot() {
@@ -286,11 +358,14 @@ final class FragmentProtocol {
         return new Snapshot(
                 assemblies.size(), awaitingFinal, missingFragments,
                 completedFrames, duplicateFrames, repairRequests, finalRepairRequests,
-                cappedRepairs, retransmissions, expiredAssemblies);
+                cappedRepairs, repairWindow.size(), repairBudgetLimit, throttledRepairs,
+                retransmissions, expiredAssemblies);
     }
 
     private void cleanup() {
-        long cutoff = now() - ttlMillis;
+        long current = now();
+        long cutoff = current - ttlMillis;
+        cleanupRepairBudget(current);
         Iterator<Map.Entry<String, Assembly>> assemblyIterator = assemblies.entrySet().iterator();
         while (assemblyIterator.hasNext()) {
             if (assemblyIterator.next().getValue().updated < cutoff) {
@@ -303,6 +378,20 @@ final class FragmentProtocol {
         while (iterator.hasNext()) if (iterator.next().getValue() < cutoff) iterator.remove();
         Iterator<Map.Entry<String, Long>> indexIterator = completedIndices.entrySet().iterator();
         while (indexIterator.hasNext()) if (indexIterator.next().getValue() < cutoff) indexIterator.remove();
+    }
+
+    private boolean takeRepairBudget(long current) {
+        cleanupRepairBudget(current);
+        if (repairWindow.size() >= repairBudgetLimit) return false;
+        repairWindow.addLast(current);
+        return true;
+    }
+
+    private void cleanupRepairBudget(long current) {
+        long cutoff = current - repairWindowMillis;
+        while (!repairWindow.isEmpty() && repairWindow.peekFirst() <= cutoff) {
+            repairWindow.removeFirst();
+        }
     }
 
     private static boolean startsWith(byte[] value, byte[] prefix) {

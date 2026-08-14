@@ -23,6 +23,10 @@ FragmentProtocol (port 76)
 ## Loop controls
 
 - Meshtastic firmware does not re-uplink packets marked `via_mqtt`.
+- Native PhoneAPI transmission normally inherits the radio owner's
+  `config_ok_to_mqtt`. Android 0.1.17+ and the Linux native interface can
+  explicitly `force_off` that per-packet permission for a controlled pure-LoRa
+  test; they cannot force it on.
 - The MQTT backend ignores its own `gateway_id`.
 - MQTT inbound packets are deduplicated by source NodeNum, packet ID and payload
   digest for five minutes by default.
@@ -52,5 +56,8 @@ FragmentProtocol (port 76)
   stalls; zero remains invalid as a data-fragment position. Updated peers
   answer it, while legacy peers safely ignore it. Periodic repair is bounded to
   three attempts per unresolved position with exponential backoff and one
-  scheduled request per pass. Broadcast repair does not request Meshtastic
-  radio ACKs, preventing a failed reverse path from multiplying control traffic.
+  scheduled request per pass. All incomplete frames also share a default
+  rolling budget of 12 requests per minute; Android defers repair without
+  consuming an attempt when its control queue is full and interleaves control
+  with waiting data. Broadcast repair does not request Meshtastic radio ACKs,
+  preventing a failed reverse path from multiplying control traffic.

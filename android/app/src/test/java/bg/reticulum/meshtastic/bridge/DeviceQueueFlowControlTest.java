@@ -53,4 +53,16 @@ public class DeviceQueueFlowControlTest {
         assertFalse(waiter.isAlive());
         assertFalse(acquired.get());
     }
+
+    @Test public void recommendsSoftPacingBeforeFirmwareQueueIsFull() {
+        DeviceQueueFlowControl flow = new DeviceQueueFlowControl();
+        flow.update(new ProtoCodec.QueueStatus(0, 16, 16, 1));
+        assertEquals(0, flow.recommendedExtraDelayMillis(2_000));
+        flow.update(new ProtoCodec.QueueStatus(0, 12, 16, 2));
+        assertEquals(2_000, flow.recommendedExtraDelayMillis(2_000));
+        flow.update(new ProtoCodec.QueueStatus(0, 8, 16, 3));
+        assertEquals(4_000, flow.recommendedExtraDelayMillis(2_000));
+        flow.update(new ProtoCodec.QueueStatus(0, 4, 16, 4));
+        assertEquals(6_000, flow.recommendedExtraDelayMillis(2_000));
+    }
 }

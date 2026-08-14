@@ -62,7 +62,11 @@ public class TransmitSchedulerTest {
             TransmitScheduler.Snapshot snapshot = scheduler.snapshot();
             assertEquals(2, snapshot.frames);
             assertEquals(2, snapshot.fragments);
+            assertEquals(2, snapshot.peakFrames);
+            assertEquals(2, snapshot.peakFragments);
             assertEquals(1, snapshot.rejectedFrames);
+            assertEquals(1, snapshot.dataRejectedFrames);
+            assertEquals(0, snapshot.controlRejectedFrames);
         } finally {
             release.countDown();
             scheduler.close();
@@ -110,6 +114,146 @@ public class TransmitSchedulerTest {
             assertEquals(List.of(1, 2), sent);
             assertEquals(1, scheduler.snapshot().retryAttempts);
             assertEquals(0, scheduler.snapshot().failedFrames);
+        } finally {
+            scheduler.close();
+        }
+    }
+
+    @Test public void alternatesControlWithWaitingDataDuringRepairStorm() throws Exception {
+        FakeTime time = new FakeTime();
+        List<Integer> sent = new ArrayList<>();
+        CountDownLatch firstStarted = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch completed = new CountDownLatch(4);
+        TransmitScheduler scheduler = scheduler(time, transmission -> {
+            synchronized (sent) { sent.add((int) transmission.payload[0]); }
+            if (transmission.payload[0] == 1) {
+                firstStarted.countDown();
+                releaseFirst.await();
+            }
+            completed.countDown();
+        });
+        try {
+            assertTrue(scheduler.enqueue(one("data", 1), false));
+            assertTrue(firstStarted.await(1, TimeUnit.SECONDS));
+            assertTrue(scheduler.enqueue(one("request", 2), false));
+            assertTrue(scheduler.enqueue(one("request", 3), false));
+            assertTrue(scheduler.enqueue(one("data", 4), false));
+            releaseFirst.countDown();
+            assertTrue(completed.await(1, TimeUnit.SECONDS));
+            assertEquals(List.of(1, 2, 4, 3), sent);
+        } finally {
+            releaseFirst.countDown();
+            scheduler.close();
+        }
+    }
+
+    @Test public void controlCapacityProbeDoesNotCountARejection() throws Exception {
+        FakeTime time = new FakeTime();
+        CountDownLatch sending = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        TransmitScheduler scheduler = new TransmitScheduler(
+                0, 2, 2, 16, 0, 0, 0,
+                transmission -> {
+                    sending.countDown();
+                    release.await();
+                }, listener(), time);
+        try {
+            assertTrue(scheduler.enqueue(one("request", 1), false));
+            assertTrue(sending.await(1, TimeUnit.SECONDS));
+            assertTrue(scheduler.enqueue(one("request", 2), false));
+            assertFalse(scheduler.canAcceptControl(1, 1));
+            assertEquals(0, scheduler.snapshot().controlRejectedFrames);
+        } finally {
+            release.countDown();
+            scheduler.close();
+        }
+    }
+
+    @Test public void constrainedPrioritySendsProofBeforeDataBeforeAnnounce() throws Exception {
+        FakeTime time = new FakeTime();
+        List<Integer> sent = new ArrayList<>();
+        CountDownLatch firstStarted = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch completed = new CountDownLatch(4);
+        TransmitScheduler scheduler = new TransmitScheduler(
+                0, 16, 64, 4096, 2, 4, 256,
+                0, () -> 0,
+                transmission -> {
+                    synchronized (sent) { sent.add((int) transmission.payload[0]); }
+                    if (transmission.payload[0] == 1) {
+                        firstStarted.countDown();
+                        releaseFirst.await();
+                    }
+                    completed.countDown();
+                }, listener(), time);
+        try {
+            assertTrue(scheduler.enqueue(one("data", 1), false, TransmitScheduler.PRIORITY_NORMAL));
+            assertTrue(firstStarted.await(1, TimeUnit.SECONDS));
+            assertTrue(scheduler.enqueue(one("data", 2), false, TransmitScheduler.PRIORITY_ANNOUNCE));
+            assertTrue(scheduler.enqueue(one("data", 3), false, TransmitScheduler.PRIORITY_NORMAL));
+            assertTrue(scheduler.enqueue(one("data", 4), false, TransmitScheduler.PRIORITY_HIGH));
+            releaseFirst.countDown();
+            assertTrue(completed.await(1, TimeUnit.SECONDS));
+            assertEquals(List.of(1, 4, 3, 2), sent);
+            TransmitScheduler.Snapshot snapshot = scheduler.snapshot();
+            assertEquals(1, snapshot.highPriorityFrames);
+            assertEquals(2, snapshot.normalPriorityFrames);
+            assertEquals(1, snapshot.announcePriorityFrames);
+        } finally {
+            releaseFirst.countDown();
+            scheduler.close();
+        }
+    }
+
+    @Test public void queueAdvisorExtendsGlobalPacing() throws Exception {
+        FakeTime time = new FakeTime();
+        List<Long> sendTimes = new ArrayList<>();
+        CountDownLatch sent = new CountDownLatch(2);
+        TransmitScheduler scheduler = new TransmitScheduler(
+                2_000, 16, 64, 4096, 2, 4, 256,
+                0, () -> 1_000,
+                transmission -> {
+                    synchronized (sendTimes) { sendTimes.add(time.nanoTime()); }
+                    sent.countDown();
+                }, listener(), time);
+        try {
+            assertTrue(scheduler.enqueue(one("data", 1), false));
+            assertTrue(scheduler.enqueue(one("data", 2), false));
+            assertTrue(sent.await(1, TimeUnit.SECONDS));
+            assertEquals(List.of(0L, 3_000_000_000L), sendTimes);
+            assertEquals(1_000, scheduler.snapshot().currentExtraDelayMillis);
+            assertTrue(scheduler.snapshot().adaptivePacingEvents >= 1);
+        } finally {
+            scheduler.close();
+        }
+    }
+
+    @Test public void announceSpacingDoesNotBlockAProofThatArrivesLater() throws Exception {
+        List<Integer> sent = new ArrayList<>();
+        List<Long> times = new ArrayList<>();
+        CountDownLatch first = new CountDownLatch(1);
+        CountDownLatch completed = new CountDownLatch(3);
+        TransmitScheduler scheduler = new TransmitScheduler(
+                0, 16, 64, 4096, 2, 4, 256,
+                120, () -> 0,
+                transmission -> {
+                    synchronized (sent) {
+                        sent.add((int) transmission.payload[0]);
+                        times.add(System.nanoTime());
+                    }
+                    if (transmission.payload[0] == 1) first.countDown();
+                    completed.countDown();
+                }, listener());
+        try {
+            assertTrue(scheduler.enqueue(one("data", 1), false, TransmitScheduler.PRIORITY_ANNOUNCE));
+            assertTrue(first.await(1, TimeUnit.SECONDS));
+            assertTrue(scheduler.enqueue(one("data", 2), false, TransmitScheduler.PRIORITY_ANNOUNCE));
+            assertTrue(scheduler.enqueue(one("data", 3), false, TransmitScheduler.PRIORITY_HIGH));
+            assertTrue(completed.await(2, TimeUnit.SECONDS));
+            assertEquals(List.of(1, 3, 2), sent);
+            assertTrue(times.get(2) - times.get(0) >= 100_000_000L);
+            assertTrue(scheduler.snapshot().announcePacingWaits >= 1);
         } finally {
             scheduler.close();
         }

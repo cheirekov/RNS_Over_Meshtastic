@@ -18,6 +18,8 @@
     tcp_port = 4403
     channel_index = 0
     hop_limit = 3
+    # inherit preserves the radio policy; force_off proves a pure-LoRa path.
+    mqtt_forwarding_policy = inherit
     tx_interval = 2.0
 
     # Use broadcast first. After it passes the radio test, change to:

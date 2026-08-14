@@ -22,6 +22,7 @@ class NativeConfig:
     hop_limit: int = 3
     want_ack: bool = False
     pki_required: bool = False
+    mqtt_forwarding_policy: str = "inherit"
 
     def __post_init__(self) -> None:
         if self.connection not in {"tcp", "serial", "ble"}:
@@ -36,6 +37,8 @@ class NativeConfig:
             raise ValueError("channel_index must be between 0 and 7")
         if not 0 <= self.hop_limit <= 7:
             raise ValueError("hop_limit must be between 0 and 7")
+        if self.mqtt_forwarding_policy not in {"inherit", "force_off"}:
+            raise ValueError("mqtt_forwarding_policy must be inherit or force_off")
 
 
 class NativeBackend(TransportBackend):
@@ -99,7 +102,7 @@ class NativeBackend(TransportBackend):
             packet.channel = self.config.channel_index
             packet.decoded.payload = payload
             packet.decoded.portnum = self._portnum
-            if self._mqtt_uplink_permitted(self._interface):
+            if self._mqtt_forwarding_allowed(self._interface):
                 packet.decoded.bitfield = 1  # BITFIELD_OK_TO_MQTT_MASK
             packet.priority = mesh_pb2.MeshPacket.Priority.RELIABLE
             self._interface._sendPacket(
@@ -117,6 +120,12 @@ class NativeBackend(TransportBackend):
             return bool(interface.localNode.localConfig.lora.config_ok_to_mqtt)
         except (AttributeError, TypeError):
             return False
+
+    def _mqtt_forwarding_allowed(self, interface: Any) -> bool:
+        return (
+            self.config.mqtt_forwarding_policy == "inherit"
+            and self._mqtt_uplink_permitted(interface)
+        )
 
     def close(self) -> None:
         with self._lock:

@@ -344,7 +344,7 @@ final class BlePhoneApiTransport implements RadioTransport {
         byte[] message = ProtoCodec.toRadioPacket(
                 localNode, destination, id, config.channel, config.hops,
                 wantAck && destination != NodeId.BROADCAST,
-                mqttUplinkPermitted, payload);
+                mqttForwardingAllowed(), payload);
         if (!deviceQueue.acquire(45_000)) throw new IllegalStateException("Meshtastic device TX queue unavailable or full for 45 seconds");
         PendingWrite pending = enqueueWrite(message);
         if (pending == null) {
@@ -361,6 +361,14 @@ final class BlePhoneApiTransport implements RadioTransport {
             throw new IllegalStateException("BLE GATT write failed: " + pending.status);
         }
         return id & 0xffffffffL;
+    }
+
+    @Override public boolean mqttForwardingAllowed() {
+        return config.allowsMqttForwarding(mqttUplinkPermitted);
+    }
+
+    @Override public long recommendedExtraDelayMillis(int baseIntervalMillis) {
+        return deviceQueue.recommendedExtraDelayMillis(baseIntervalMillis);
     }
 
     private void failTimedOutWrite(PendingWrite pending) {
