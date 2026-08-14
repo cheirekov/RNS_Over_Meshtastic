@@ -44,14 +44,4 @@ public class RnsTrafficTelemetryTest {
         assertTrue(snapshot.radioWindow.contains("RX 0 fragments/0 B"));
     }
 
-    @Test public void mapsRnsTypesToConstrainedSchedulerPriorities() {
-        assertEquals(TransmitScheduler.PRIORITY_NORMAL,
-                RnsTrafficTelemetry.schedulerPriority(frame(0, 0, 32)));
-        assertEquals(TransmitScheduler.PRIORITY_ANNOUNCE,
-                RnsTrafficTelemetry.schedulerPriority(frame(1, 0, 64)));
-        assertEquals(TransmitScheduler.PRIORITY_HIGH,
-                RnsTrafficTelemetry.schedulerPriority(frame(2, 0, 64)));
-        assertEquals(TransmitScheduler.PRIORITY_HIGH,
-                RnsTrafficTelemetry.schedulerPriority(frame(3, 0, 48)));
-    }
 }

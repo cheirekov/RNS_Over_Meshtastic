@@ -117,15 +117,6 @@ final class RnsTrafficTelemetry {
         return typeName(type) + "/" + contextName(context) + " (" + frame.length + " B)";
     }
 
-    static int schedulerPriority(byte[] frame) {
-        if (frame == null || frame.length < 1) return TransmitScheduler.PRIORITY_NORMAL;
-        return switch (packetType(frame)) {
-            case 1 -> TransmitScheduler.PRIORITY_ANNOUNCE;
-            case 2, 3 -> TransmitScheduler.PRIORITY_HIGH;
-            default -> TransmitScheduler.PRIORITY_NORMAL;
-        };
-    }
-
     private static int packetType(byte[] frame) { return frame[0] & 0x03; }
 
     private static String typeName(int type) {

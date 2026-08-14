@@ -514,7 +514,7 @@ Sideband/Columba, изчакайте 70 секунди и копирайте dia
 тогава TX вече не е нула, трафикът е генериран от Reticulum клиента/неговата
 локална RNS instance, а не от BLE, TCP PhoneAPI или чужд Meshtastic трафик.
 
-### Фаза F — 0.1.19 constrained scheduler A/B
+### Фаза F — 0.1.20 FIFO + queue pacing A/B
 
 Повторете same-room pure-LoRa setup от Фаза E с `constrained_auto` на двата
 bridge-а. Оставете body 200, base interval 2000 ms, hop 0, broadcast, ACK off и
@@ -522,20 +522,19 @@ bridge-а. Оставете body 200, base interval 2000 ms, hop 0, broadcast, A
 контактите. След това изпратете един кратък текст A→B и един B→A, без burst.
 
 Диагностиката трябва да показва `traffic scheduling: constrained_auto` и
-`scheduler policy: high/normal/announce ...`. Distinct announce frames се
-стартират през поне 15 секунди, но proof или normal data могат да ги изпреварят.
-`adaptive pacing ... last +N ms` може да стане ненулево при firmware queue
-occupancy; това е scheduler delay, не Meshtastic duty-cycle override. Acceptance:
+`scheduler: RNS FIFO causal order`. `queue pacing ... last +N ms` може да
+стане ненулево при firmware queue occupancy; това е order-preserving scheduler
+delay, не Meshtastic duty-cycle override. Нито data, proof, link, нито announce
+може да изпревари по-рано приет RNS frame. Acceptance:
 
 - frame/fragment mix на TX край съвпада с RX на отсрещния край;
 - няма data/control reject, local retry, repair или expired assembly;
 - `peak used` е по-нисък от 0.1.18 baseline 11/16 или поне не достига full;
-- краткият текст и proof не чакат зад цял announce burst.
+- краткият текст получава крайния RNS/LXMF proof и в двете посоки.
 
 При regression изберете `transparent` на двата bridge-а. Той запазва новата
-диагностика, но изключва priority ordering, 15-second announce spacing и soft
-QueueStatus pacing, тоест дава пряко сравнение със scheduler поведението на
-0.1.18.
+диагностика и същия FIFO ред, но изключва soft QueueStatus pacing, тоест дава
+пряко сравнение със scheduler поведението на 0.1.18.
 
 ## След успешния първи тест
 

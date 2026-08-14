@@ -229,6 +229,45 @@ public class TransmitSchedulerTest {
         }
     }
 
+    @Test public void normalRnsFramesPreserveCausalArrivalOrder() throws Exception {
+        FakeTime time = new FakeTime();
+        List<Integer> sent = new ArrayList<>();
+        CountDownLatch firstStarted = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch completed = new CountDownLatch(4);
+        TransmitScheduler scheduler = new TransmitScheduler(
+                0, 16, 64, 4096, 2, 4, 256,
+                0, () -> 0,
+                transmission -> {
+                    synchronized (sent) { sent.add((int) transmission.payload[0]); }
+                    if (transmission.payload[0] == 1) {
+                        firstStarted.countDown();
+                        releaseFirst.await();
+                    }
+                    completed.countDown();
+                }, listener(), time);
+        try {
+            // These values stand for announce, data, announce and proof. The
+            // production bridge deliberately submits every RNS type as NORMAL.
+            assertTrue(scheduler.enqueue(one("data", 1), false,
+                    TransmitScheduler.PRIORITY_NORMAL));
+            assertTrue(firstStarted.await(1, TimeUnit.SECONDS));
+            assertTrue(scheduler.enqueue(one("data", 2), false,
+                    TransmitScheduler.PRIORITY_NORMAL));
+            assertTrue(scheduler.enqueue(one("data", 3), false,
+                    TransmitScheduler.PRIORITY_NORMAL));
+            assertTrue(scheduler.enqueue(one("data", 4), false,
+                    TransmitScheduler.PRIORITY_NORMAL));
+            releaseFirst.countDown();
+            assertTrue(completed.await(1, TimeUnit.SECONDS));
+            assertEquals(List.of(1, 2, 3, 4), sent);
+            assertEquals(4, scheduler.snapshot().normalPriorityFrames);
+        } finally {
+            releaseFirst.countDown();
+            scheduler.close();
+        }
+    }
+
     @Test public void announceSpacingDoesNotBlockAProofThatArrivesLater() throws Exception {
         List<Integer> sent = new ArrayList<>();
         List<Long> times = new ArrayList<>();

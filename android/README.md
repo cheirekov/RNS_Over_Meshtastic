@@ -94,14 +94,15 @@ Version 0.1.18 adds secret-free Reticulum packet-type counters and a rolling
 scheduling, ACK policy or the port 76 wire format; it makes background
 announce/proof/link traffic distinguishable from user data and repair traffic.
 
-Version 0.1.19 adds the default `constrained_auto` traffic profile. Proof and
-link-control frames pre-empt normal data, normal data pre-empts announcements,
-and one ready announcement is still served after four non-announce frames to
-avoid starvation. Distinct announce frames are started at least 15 seconds
-apart, but are not semantically discarded or rewritten. PhoneAPI queue
-occupancy adds 0/1x/2x/3x of the configured base interval before the next
-fragment at the 0/25/50/75% queue thresholds, capped at eight seconds. Select
-`transparent` for an immediate rollback to FIFO/base-pacing behaviour.
+Version 0.1.20 keeps strict FIFO causal order for every Reticulum frame. The
+0.1.19 packet-type priority and independent announce spacing were withdrawn:
+a same-room field test proved that later data could overtake path announces
+and prevent the expected proof from returning. The default `constrained_auto`
+profile now changes pacing only. PhoneAPI queue occupancy adds 0/1x/2x/3x of
+the configured base interval before the next fragment at the 0/25/50/75%
+queue thresholds, capped at eight seconds. Select `transparent` for FIFO with
+the configured fixed base interval. Neither profile rewrites or discards RNS
+frames.
 
 ## Reproducible build
 

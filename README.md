@@ -43,7 +43,7 @@ The Linux/NixOS implementation provides:
   bounded retransmission cache;
 - optional Reticulum IFAC isolation with `network_name` and `passphrase`.
 
-Android bridge 0.1.19 provides:
+Android bridge 0.1.20 provides:
 
 - a direct BLE or TCP PhoneAPI connection without depending on the official
   Meshtastic Android app;
@@ -97,10 +97,10 @@ Android bridge 0.1.19 provides:
 - a Reticulum frame-type breakdown and a rolling 60-second count of actual
   Meshtastic data/repair fragments, so channel utilisation can be correlated
   with announce, proof, link and user-data traffic without inspecting secrets;
-- a reversible `constrained_auto / transparent` scheduler profile.
-  `constrained_auto` prioritises proofs/link control over short data and
-  announcements, spaces distinct announce frames without dropping them, and
-  stretches fragment pacing before the Meshtastic firmware queue fills.
+- a reversible `constrained_auto / transparent` scheduler profile. Both keep
+  the causal FIFO order of the raw Reticulum stream. `constrained_auto` only
+  stretches fragment pacing before the Meshtastic firmware queue fills;
+  `transparent` uses the configured fixed interval.
 
 The `10 Mbps` value that a Reticulum client displays belongs to the standard
 local TCP interface and is not an estimate of LoRa throughput. It is not purely

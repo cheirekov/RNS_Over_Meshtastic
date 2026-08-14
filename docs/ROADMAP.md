@@ -408,23 +408,24 @@ channel-encrypted LoRa път с 0 hops, без MQTT/MQTT→LoRa:
 Това приема BLE/TCP PhoneAPI, port 76 framing/reassembly, `force_off` и
 broadcast reliability при идеален RF път. То едновременно потвърждава, че
 наблюдаваният ChUtil е реален bridge-carried RNS трафик: run-ът съдържа девет
-announce и осем proof рамки, общо 41 LoRa fragments. Следващата оптимизация не
-трябва да променя wire format или repair budget. Тя е constrained-link
-scheduling: proof/short-data преди announce, измерено announce shaping и
-queue-aware pacing. Honor firmware queue е достигнала peak 11/16 used без
-reject; това е сигнал за по-ранна soft backpressure, не доказана загуба.
+announce и осем proof рамки, общо 41 LoRa fragments. Honor firmware queue е
+достигнала peak 11/16 used без reject; това е сигнал за по-ранна soft
+backpressure, не доказана загуба.
 
-0.1.19 реализира тази ограничена scheduler стъпка зад обратим profile.
-`constrained_auto` класифицира всяка завършена изходяща RNS рамка преди legacy
-fragmentation: proof/link control е с висок приоритет, обикновените data рамки
-са normal, а announce е low. След четири завършени non-announce рамки се
-обслужва готов announce, за да няма starvation. Отделните announce рамки
-започват през поне 15 секунди; нито един различен announce не се изтрива,
-слива или променя. Firmware QueueStatus добавя soft delay преди изчерпване:
-+1x/+2x/+3x от configured base interval при 25/50/75% occupancy, с максимум
-+8 секунди. Това не променя Meshtastic duty cycle, RNS wire bytes,
-fragmentation, repair или ACK semantics. `transparent` връща 0.1.18
-FIFO/base-pacing поведението за директно A/B сравнение.
+0.1.19 опита packet-type priority и отделно 15-секундно announce shaping зад
+обратим profile. Same-room pure-LoRa тестът доказа регресия: от 13 announce
+рамки на Pixel до момента на диагностиката Honor беше получил само 5, докато
+по-късни data рамки вече ги бяха изпреварили; не се появи нито един proof и
+едната посока не достави краткия текст. Следователно суровият RNS TCP поток
+има причинен ред, който прозрачният bridge няма достатъчно семантичен контекст
+да пренарежда. 0.1.19 е оттеглена като тестова версия.
+
+0.1.20 възстановява строг FIFO ред за всички RNS packet types и премахва
+независимото announce spacing. `constrained_auto` запазва само безопасната
+QueueStatus soft pacing: +1x/+2x/+3x от configured base interval при
+25/50/75% occupancy, с максимум +8 секунди. `transparent` е FIFO с фиксирания
+base interval. И двата режима запазват RNS wire bytes, fragmentation, repair,
+ACK semantics и regulatory duty-cycle настройките.
 
 ## Приоритет 1 — измерена delivery policy
 

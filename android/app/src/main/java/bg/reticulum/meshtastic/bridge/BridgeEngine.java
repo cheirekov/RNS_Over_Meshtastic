@@ -70,7 +70,11 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                 config.txIntervalMillis,
                 MAX_QUEUED_FRAMES, maxQueuedFragments, maxQueuedBytes,
                 2, reservedControlFragments, reservedControlFragments * (config.fragmentBody + 2),
-                constrainedScheduling() ? 15_000 : 0,
+                // Reticulum frames arrive as one causally ordered byte stream.
+                // Do not delay announcements independently or allow later data
+                // to overtake them; 0.1.19 proved that this can invalidate paths
+                // and prevent the corresponding delivery proof from returning.
+                0,
                 () -> constrainedScheduling()
                         ? radio.recommendedExtraDelayMillis(config.txIntervalMillis) : 0,
                 this::sendTransmission,
@@ -162,10 +166,11 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     @Override public void onFrame(byte[] frame) {
         try {
             List<FragmentProtocol.Transmission> transmissions = fragments.encode(frame, config.outboundDestination());
-            int priority = constrainedScheduling()
-                    ? RnsTrafficTelemetry.schedulerPriority(frame)
-                    : TransmitScheduler.PRIORITY_NORMAL;
-            if (queueTransmissions(transmissions, true, priority)) {
+            // Preserve the exact order emitted by the local RNS instance. Packet
+            // type is telemetry only; it is not sufficient to infer dependencies
+            // between an announce, data frame and proof at this transparent edge.
+            if (queueTransmissions(
+                    transmissions, true, TransmitScheduler.PRIORITY_NORMAL)) {
                 rnsToMesh.incrementAndGet();
                 traffic.recordFrame(true, frame);
             }
@@ -268,10 +273,8 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                         + "\n" + deviceQueueState
                         + "; backpressure: " + queue.backpressureEvents
                         + ", local retries: " + queue.retryAttempts + ", dropped: " + dropped
-                        + "\nscheduler policy: high/normal/announce "
-                        + queue.highPriorityFrames + "/" + queue.normalPriorityFrames + "/"
-                        + queue.announcePriorityFrames + " frames; announce waits "
-                        + queue.announcePacingWaits + "; adaptive pacing "
+                        + "\nscheduler: RNS FIFO causal order; accepted "
+                        + queue.normalPriorityFrames + " RNS frames; queue pacing "
                         + queue.adaptivePacingEvents + " events, last +"
                         + queue.currentExtraDelayMillis + " ms"
                         + "\nRNS client delivery: " + client.deliveredTotal() + " frames ("
