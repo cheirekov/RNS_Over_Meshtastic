@@ -31,6 +31,31 @@ final class FragmentProtocol {
         final List<Transmission> transmissions = new ArrayList<>();
     }
 
+    static final class Snapshot {
+        final int activeAssemblies;
+        final int awaitingFinal;
+        final int missingFragments;
+        final long completedFrames;
+        final long duplicateFrames;
+        final long repairRequests;
+        final long retransmissions;
+        final long expiredAssemblies;
+
+        Snapshot(
+                int activeAssemblies, int awaitingFinal, int missingFragments,
+                long completedFrames, long duplicateFrames, long repairRequests,
+                long retransmissions, long expiredAssemblies) {
+            this.activeAssemblies = activeAssemblies;
+            this.awaitingFinal = awaitingFinal;
+            this.missingFragments = missingFragments;
+            this.completedFrames = completedFrames;
+            this.duplicateFrames = duplicateFrames;
+            this.repairRequests = repairRequests;
+            this.retransmissions = retransmissions;
+            this.expiredAssemblies = expiredAssemblies;
+        }
+    }
+
     private static final class Assembly {
         long updated;
         Integer last;
@@ -54,6 +79,11 @@ final class FragmentProtocol {
     private final Map<String, Assembly> assemblies = new HashMap<>();
     private final LinkedHashMap<String, CachedTx> txCache = new LinkedHashMap<>();
     private final LinkedHashMap<String, Long> completed = new LinkedHashMap<>();
+    private long completedFrames;
+    private long duplicateFrames;
+    private long repairRequests;
+    private long retransmissions;
+    private long expiredAssemblies;
 
     FragmentProtocol(int bodySize) { this(bodySize, 180_000, 5_000); }
 
@@ -110,6 +140,7 @@ final class FragmentProtocol {
                 if (now - lastRequest >= requestCooldownMillis) {
                     result.transmissions.add(new Transmission(source, new byte[] {'R', 'E', 'Q', (byte) index, (byte) p}, "request"));
                     assembly.requested.put(p, now);
+                    repairRequests++;
                 }
             }
         }
@@ -126,7 +157,8 @@ final class FragmentProtocol {
         if (!completed.containsKey(completeKey)) {
             result.frames.add(complete);
             completed.put(completeKey, now);
-        }
+            completedFrames++;
+        } else duplicateFrames++;
         return result;
     }
 
@@ -139,13 +171,39 @@ final class FragmentProtocol {
         if (cached == null) cached = txCache.get(cacheKey(index, "^all"));
         if (cached != null && cached.fragments.containsKey(position)) {
             result.transmissions.add(new Transmission(source, cached.fragments.get(position), "retransmit"));
+            retransmissions++;
         }
         return result;
     }
 
+    synchronized Snapshot snapshot() {
+        cleanup();
+        int awaitingFinal = 0;
+        int missingFragments = 0;
+        for (Assembly assembly : assemblies.values()) {
+            if (assembly.last == null) {
+                awaitingFinal++;
+                continue;
+            }
+            for (int position = 1; position <= assembly.last; position++) {
+                if (!assembly.fragments.containsKey(position)) missingFragments++;
+            }
+        }
+        return new Snapshot(
+                assemblies.size(), awaitingFinal, missingFragments,
+                completedFrames, duplicateFrames, repairRequests,
+                retransmissions, expiredAssemblies);
+    }
+
     private void cleanup() {
         long cutoff = now() - ttlMillis;
-        assemblies.entrySet().removeIf(entry -> entry.getValue().updated < cutoff);
+        Iterator<Map.Entry<String, Assembly>> assemblyIterator = assemblies.entrySet().iterator();
+        while (assemblyIterator.hasNext()) {
+            if (assemblyIterator.next().getValue().updated < cutoff) {
+                assemblyIterator.remove();
+                expiredAssemblies++;
+            }
+        }
         txCache.entrySet().removeIf(entry -> entry.getValue().created < cutoff);
         Iterator<Map.Entry<String, Long>> iterator = completed.entrySet().iterator();
         while (iterator.hasNext()) if (iterator.next().getValue() < cutoff) iterator.remove();

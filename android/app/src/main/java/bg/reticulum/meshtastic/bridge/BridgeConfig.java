@@ -22,12 +22,12 @@ final class BridgeConfig {
     final Set<String> allowedSourceNodes;
     final int fragmentBody;
     final int txIntervalMillis;
-    final boolean wantAck;
+    final String ackPolicy;
 
     BridgeConfig(
             String transport, String radioHost, int radioPort, String bleAddress, int localPort,
             int channel, int hops, String mode, String gateway, int fragmentBody,
-            int txIntervalMillis, boolean wantAck, String allowedSources) {
+            int txIntervalMillis, String ackPolicy, String allowedSources) {
         this.transport = transport;
         this.radioHost = radioHost;
         this.radioPort = radioPort;
@@ -41,7 +41,7 @@ final class BridgeConfig {
         this.allowedSourceNodes = parseAllowedSources(this.allowedSources);
         this.fragmentBody = fragmentBody;
         this.txIntervalMillis = txIntervalMillis;
-        this.wantAck = wantAck;
+        this.ackPolicy = ackPolicy;
         validate();
     }
 
@@ -59,7 +59,9 @@ final class BridgeConfig {
                 p.getString("gateway", "!8fd13c64"),
                 p.getInt("fragment_body", 200),
                 p.getInt("tx_interval_ms", 2000),
-                p.getBoolean("want_ack", false),
+                p.contains("ack_policy")
+                        ? p.getString("ack_policy", "off")
+                        : (p.getBoolean("want_ack", false) ? "critical" : "off"),
                 p.getString("allowed_sources", ""));
     }
 
@@ -77,7 +79,8 @@ final class BridgeConfig {
                 .putString("allowed_sources", allowedSources)
                 .putInt("fragment_body", fragmentBody)
                 .putInt("tx_interval_ms", txIntervalMillis)
-                .putBoolean("want_ack", wantAck)
+                .putString("ack_policy", ackPolicy)
+                .remove("want_ack")
                 .apply();
     }
 
@@ -109,6 +112,9 @@ final class BridgeConfig {
         if (hops < 0 || hops > 7) throw new IllegalArgumentException("Hop limit must be 0..7");
         if (!mode.equals("broadcast") && !mode.equals("gateway_unicast")) throw new IllegalArgumentException("Invalid mode");
         if (mode.equals("gateway_unicast")) NodeId.parse(gateway);
+        if (!ackPolicy.equals("off") && !ackPolicy.equals("critical") && !ackPolicy.equals("all")) {
+            throw new IllegalArgumentException("ACK policy must be off, critical or all");
+        }
         if (fragmentBody < 1 || fragmentBody > 230) throw new IllegalArgumentException("Fragment body must be 1..230");
         if (txIntervalMillis < 0 || txIntervalMillis > 60_000) throw new IllegalArgumentException("TX interval must be 0..60000 ms");
     }

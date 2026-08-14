@@ -18,6 +18,7 @@ import java.security.SecureRandom;
 import java.util.ArrayDeque;
 import java.util.Queue;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -35,6 +36,27 @@ final class BlePhoneApiTransport implements RadioTransport {
     private static final int CONFIG_NONCE = 69420;
     private static final int NODE_INFO_NONCE = 69421;
     private static final int MAX_PENDING_WRITES = 64;
+    private static final int WRITE_NOT_SUBMITTED = -10_001;
+    private static final int WRITE_DISCONNECTED = -10_002;
+    private static final int WRITE_TIMEOUT = -10_003;
+    private static final long GATT_WRITE_TIMEOUT_MILLIS = 15_000;
+
+    private static final class PendingWrite {
+        final byte[] protobuf;
+        final CountDownLatch completed = new CountDownLatch(1);
+        volatile int status = WRITE_TIMEOUT;
+
+        PendingWrite(byte[] protobuf) { this.protobuf = protobuf; }
+
+        void complete(int result) {
+            status = result;
+            completed.countDown();
+        }
+
+        boolean await(long timeoutMillis) throws InterruptedException {
+            return completed.await(timeoutMillis, TimeUnit.MILLISECONDS);
+        }
+    }
 
     private final Context context;
     private final BridgeConfig config;
@@ -43,7 +65,7 @@ final class BlePhoneApiTransport implements RadioTransport {
     private final AtomicInteger packetId = new AtomicInteger(new SecureRandom().nextInt());
     // Nonce 1 is a firmware sentinel that forces a NodeInfo LoRa broadcast.
     private final AtomicInteger heartbeat = new AtomicInteger(1);
-    private final Queue<byte[]> writes = new ArrayDeque<>();
+    private final Queue<PendingWrite> writes = new ArrayDeque<>();
     private final DeviceQueueFlowControl deviceQueue = new DeviceQueueFlowControl();
     private final ReconnectBackoff reconnectBackoff = new ReconnectBackoff(5_000, 60_000);
     private final Runnable reconnect = this::connect;
@@ -55,6 +77,7 @@ final class BlePhoneApiTransport implements RadioTransport {
     private BluetoothGattCharacteristic fromRadio;
     private boolean writeBusy;
     private boolean readBusy;
+    private PendingWrite activeWrite;
     private boolean nodeInfoRequested;
     private boolean profileConfigured;
     private int fromRadioCount;
@@ -221,6 +244,9 @@ final class BlePhoneApiTransport implements RadioTransport {
         @Override public void onCharacteristicWrite(BluetoothGatt current, BluetoothGattCharacteristic characteristic, int status) {
             synchronized (writes) {
                 writeBusy = false;
+                PendingWrite completed = activeWrite;
+                activeWrite = null;
+                if (completed != null) completed.complete(status);
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     listener.onRadioState(false, "BLE PhoneAPI write failed: " + status);
                 }
@@ -242,7 +268,7 @@ final class BlePhoneApiTransport implements RadioTransport {
             }
             if (message.configOkToMqtt != null) {
                 mqttUplinkPermitted = message.configOkToMqtt;
-                listener.onRadioState(true, "Radio MQTT uplink permission: " + mqttUplinkPermitted);
+                listener.onRadioState(true, "Radio OK-to-MQTT permission: " + mqttUplinkPermitted);
             }
             if (message.queueStatus != null) {
                 deviceQueue.update(message.queueStatus);
@@ -257,7 +283,7 @@ final class BlePhoneApiTransport implements RadioTransport {
                 listener.onRadioState(true, "BLE config loaded; reading node database");
             } else if (message.configCompleteId != null && message.configCompleteId == NODE_INFO_NONCE) {
                 listener.onRadioState(true, "BLE PhoneAPI handshake complete as " + NodeId.format(localNode)
-                        + "; MQTT uplink permission: " + mqttUplinkPermitted);
+                        + "; OK-to-MQTT permission: " + mqttUplinkPermitted);
             }
             if (message.packet != null && ProtoCodec.isBridgePort(message.packet.port)) listener.onPacket(message.packet);
         } catch (IllegalArgumentException ignored) {}
@@ -277,12 +303,17 @@ final class BlePhoneApiTransport implements RadioTransport {
     }
 
     private boolean enqueue(byte[] protobuf) {
-        if (closed) return false;
+        return enqueueWrite(protobuf) != null;
+    }
+
+    private PendingWrite enqueueWrite(byte[] protobuf) {
+        if (closed) return null;
         synchronized (writes) {
-            if (writes.size() >= MAX_PENDING_WRITES) return false;
-            writes.add(protobuf);
+            if (writes.size() + (activeWrite == null ? 0 : 1) >= MAX_PENDING_WRITES) return null;
+            PendingWrite pending = new PendingWrite(protobuf);
+            writes.add(pending);
             writeNextLocked();
-            return true;
+            return pending;
         }
     }
 
@@ -294,26 +325,52 @@ final class BlePhoneApiTransport implements RadioTransport {
     private void writeNextLocked() {
         BluetoothGatt current = gatt;
         if (writeBusy || readBusy || current == null || toRadio == null || writes.isEmpty()) return;
-        byte[] value = writes.remove();
+        PendingWrite pending = writes.remove();
+        activeWrite = pending;
         toRadio.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
-        toRadio.setValue(value);
+        toRadio.setValue(pending.protobuf);
         writeBusy = current.writeCharacteristic(toRadio);
-        if (!writeBusy) listener.onRadioState(false, "BLE stack rejected a PhoneAPI write");
+        if (!writeBusy) {
+            activeWrite = null;
+            pending.complete(WRITE_NOT_SUBMITTED);
+            listener.onRadioState(false, "BLE stack rejected a PhoneAPI write");
+            writeNextLocked();
+        }
     }
 
-    @Override public long send(byte[] payload, long destination) throws Exception {
+    @Override public long send(byte[] payload, long destination, boolean wantAck) throws Exception {
         if (localNode == 0) throw new IllegalStateException("radio identity is not available yet");
         int id = packetId.updateAndGet(previous -> previous == -1 ? 1 : previous + 1);
         byte[] message = ProtoCodec.toRadioPacket(
                 localNode, destination, id, config.channel, config.hops,
-                config.wantAck && destination != NodeId.BROADCAST,
+                wantAck && destination != NodeId.BROADCAST,
                 mqttUplinkPermitted, payload);
         if (!deviceQueue.acquire(45_000)) throw new IllegalStateException("Meshtastic device TX queue unavailable or full for 45 seconds");
-        if (!enqueue(message)) {
+        PendingWrite pending = enqueueWrite(message);
+        if (pending == null) {
             deviceQueue.releaseAfterLocalFailure();
             throw new IllegalStateException("BLE PhoneAPI queue is full");
         }
+        if (!pending.await(GATT_WRITE_TIMEOUT_MILLIS)) {
+            failTimedOutWrite(pending);
+            deviceQueue.releaseAfterLocalFailure();
+            throw new IllegalStateException("BLE GATT write callback timed out after 15 seconds");
+        }
+        if (pending.status != BluetoothGatt.GATT_SUCCESS) {
+            deviceQueue.releaseAfterLocalFailure();
+            throw new IllegalStateException("BLE GATT write failed: " + pending.status);
+        }
         return id & 0xffffffffL;
+    }
+
+    private void failTimedOutWrite(PendingWrite pending) {
+        BluetoothGatt current;
+        synchronized (writes) {
+            if (writes.remove(pending)) pending.complete(WRITE_TIMEOUT);
+            else if (activeWrite == pending) pending.complete(WRITE_TIMEOUT);
+            current = gatt;
+        }
+        if (current != null) main.post(current::disconnect);
     }
 
     @Override public boolean isReady() { return localNode != 0; }
@@ -332,6 +389,9 @@ final class BlePhoneApiTransport implements RadioTransport {
         deviceQueue.reset();
         synchronized (writes) {
             writeBusy = false;
+            if (activeWrite != null) activeWrite.complete(WRITE_DISCONNECTED);
+            activeWrite = null;
+            for (PendingWrite pending : writes) pending.complete(WRITE_DISCONNECTED);
             writes.clear();
         }
     }

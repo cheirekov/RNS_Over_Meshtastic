@@ -38,8 +38,12 @@ FragmentProtocol (port 76)
   Portduino-backed virtual node can provide a full Meshtastic identity.
 - The Android foreground-service bridge is implemented and uses the same port
   76 fragmentation and gateway-unicast semantics. Its Reticulum-facing link is
-  loopback TCP, so clients see the local TCP bitrate while the bridge enforces
-  the actual radio constraint with pacing, bounded queues and PhoneAPI flow
-  control.
+  loopback TCP. Standard RNS 1.4.2 assigns that interface a fixed 10 Mbps guess,
+  which also shortens initial proof/link timeouts. The bridge cannot negotiate
+  a different bitrate over the existing TCP wire format, so it keeps only a
+  near-interface bounded queue and propagates TCP backpressure early, in
+  addition to radio pacing and PhoneAPI flow control.
 - Persistent store-and-forward belongs at the LXMF propagation layer. The
-  transport does not persist and replay arbitrary opaque Reticulum frames.
+  transport does not persist arbitrary opaque Reticulum frames. Android keeps
+  only a volatile, bounded five-minute inbound FIFO so a completed frame can
+  survive a short local Sideband/Columba TCP restart.

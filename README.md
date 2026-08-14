@@ -43,7 +43,7 @@ The Linux/NixOS implementation provides:
   bounded retransmission cache;
 - optional Reticulum IFAC isolation with `network_name` and `passphrase`.
 
-Android bridge 0.1.8 provides:
+Android bridge 0.1.13 provides:
 
 - a direct BLE or TCP PhoneAPI connection without depending on the official
   Meshtastic Android app;
@@ -62,12 +62,36 @@ Android bridge 0.1.8 provides:
 - separate TX/RX frame and fragment telemetry, last inbound peer/path/RF
   metadata, and correlation of optional Meshtastic routing ACK/NAK responses;
 - delivery reporting that distinguishes radio confirmation, explicit NAK and
-  an unknown result after ACK timeout from Reticulum/LXMF delivery proofs.
+  an unknown result after ACK timeout from Reticulum/LXMF delivery proofs;
+- synchronous accounting of BLE GATT write completion and two bounded local
+  retries, so a late GATT rejection is not silently counted as a sent fragment;
+- explicit `off`, `critical` and diagnostic `all` Meshtastic ACK policies. The
+  critical policy protects final fragments of multi-fragment frames and repair control
+  traffic, avoiding the ACK-all congestion observed in field testing.
+- persistent PhoneAPI rejection telemetry, including explicit
+  `DUTY_CYCLE_LIMIT (9)` and `RATE_LIMIT_EXCEEDED (38)` results; regulatory
+  duty-cycle override is never enabled by the bridge;
+- explicit admission diagnostics for RNS frames that exceed the bounded LoRa
+  queue, plus active/incomplete fragment assembly, repair, retransmit, expiry
+  and duplicate counters;
+- path diagnostics that distinguish direct MQTT reception from an
+  MQTT-origin packet whose final delivery mechanism was LoRa (`MQTT→LoRa`);
+- a volatile five-minute inbound spool (32 frames, 64 KiB) for a short local
+  Sideband/Columba disconnect, with FIFO replay, deduplication, expiry and
+  rejection counters. This is not persistent LXMF store-and-forward.
 
-The `10 Mbps` value that a Reticulum client can display belongs to the local TCP
-connection to the Android bridge. It is not an estimate of LoRa throughput.
-The bridge currently enforces the radio bottleneck at its bounded scheduler and
-PhoneAPI queue boundary.
+The `10 Mbps` value that a Reticulum client displays belongs to the standard
+local TCP interface and is not an estimate of LoRa throughput. It is not purely
+cosmetic, however: Reticulum also uses the interface bitrate when calculating
+initial packet-proof and link-establishment timeouts. Android 0.1.11+ therefore
+keeps only a near-interface radio queue and applies TCP backpressure early,
+instead of acknowledging minutes of work into a slow LoRa scheduler. Existing
+Sideband/Columba TCP configuration has no standard bitrate negotiation field;
+the remaining timeout mismatch is tracked as an upstream-integration issue.
+Recent Sideband versions create a high-speed Backbone client whose automatic
+hardware MTU can be many kilobytes. Multi-kilobyte resource frames do not fit
+the deliberately short LoRa queue and are rejected locally; 0.1.12 makes the
+frame size and admission limit visible instead of conflating this with RF loss.
 
 ## Demonstrated end-to-end scenarios
 
@@ -82,13 +106,14 @@ The following have been exercised on real hardware and clients:
 - two Android phones in fixed reciprocal Meshtastic unicast mode without an
   intermediate Linux server;
 - operation with and without Reticulum IFAC;
-- a small image transfer as a controlled low-bandwidth test;
+- a small image transfer as a controlled low-bandwidth test, while repeatable
+  multi-kilobyte resource/file delivery remains unresolved and is not claimed;
 - Android foreground operation on Pixel Android and Honor MagicOS after the
   required OEM battery permissions were granted;
 - MQTT downlink with a non-zero hop limit on a broker whose deployment permits
   it, including a returned Meshtastic routing ACK.
 
-Automated validation currently contains 31 Python tests and 24 Android unit
+Automated validation currently contains 31 Python tests and 38 Android unit
 tests, in addition to Android lint and containerised APK builds. Exact,
 repeatable procedures and the distinction between native Meshtastic DM and the
 decoded MQTT virtual-node path are in [docs/TESTING.md](docs/TESTING.md).
@@ -100,8 +125,9 @@ Work after the MVP is deliberately measurement-driven:
 1. Run two-phone and phone-to-Linux background soak tests, including radio
    disconnect/reconnect, screen-off operation, queue peaks, delivery latency
    and battery drain on more Android vendors.
-2. Characterise useful payload sizes and safe pacing for the supported modem
-   presets instead of treating the local TCP rate as radio capacity.
+2. Characterise useful payload sizes, safe pacing and TCP-backpressure latency
+   for the supported modem presets; evaluate a standard way for clients to
+   represent the constrained segment instead of the fixed TCP bitrate guess.
 3. Field-validate the new radio ACK/NAK telemetry against Reticulum/LXMF proofs
    and tune the constrained return path without treating an ACK timeout as
    proof that the payload was not delivered.

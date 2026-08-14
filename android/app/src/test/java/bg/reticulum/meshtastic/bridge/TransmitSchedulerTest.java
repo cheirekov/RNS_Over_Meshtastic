@@ -69,6 +69,52 @@ public class TransmitSchedulerTest {
         }
     }
 
+    @Test public void explainsFrameThatCanNeverFitAdmissionWindow() throws Exception {
+        FakeTime time = new FakeTime();
+        TransmitScheduler scheduler = new TransmitScheduler(
+                2_000, 8, 4, 808, 2, 1, 202,
+                transmission -> {}, listener(), time);
+        try {
+            List<FragmentProtocol.Transmission> oversized = List.of(
+                    transmission(1, 202), transmission(2, 202),
+                    transmission(3, 202), transmission(4, 202));
+            assertFalse(scheduler.enqueue(oversized, true));
+            TransmitScheduler.Snapshot snapshot = scheduler.snapshot();
+            assertEquals(1, snapshot.rejectedFrames);
+            assertEquals(
+                    "data frame 4 fragments/808 bytes exceeds admission limit "
+                            + "3 fragments/606 bytes",
+                    snapshot.lastRejection);
+        } finally {
+            scheduler.close();
+        }
+    }
+
+    @Test public void retriesTransientLocalSendFailureWithoutDroppingRemainingFragments() throws Exception {
+        FakeTime time = new FakeTime();
+        List<Integer> sent = new ArrayList<>();
+        int[] attempts = {0};
+        CountDownLatch completed = new CountDownLatch(2);
+        TransmitScheduler scheduler = scheduler(time, transmission -> {
+            attempts[0]++;
+            if (attempts[0] == 1) throw new IllegalStateException("transient GATT failure");
+            sent.add((int) transmission.payload[0]);
+            completed.countDown();
+        });
+        try {
+            List<FragmentProtocol.Transmission> frame = List.of(
+                    new FragmentProtocol.Transmission("!12345678", new byte[] {1}, "data"),
+                    new FragmentProtocol.Transmission("!12345678", new byte[] {2}, "data"));
+            assertTrue(scheduler.enqueue(frame, false));
+            assertTrue(completed.await(1, TimeUnit.SECONDS));
+            assertEquals(List.of(1, 2), sent);
+            assertEquals(1, scheduler.snapshot().retryAttempts);
+            assertEquals(0, scheduler.snapshot().failedFrames);
+        } finally {
+            scheduler.close();
+        }
+    }
+
     private static TransmitScheduler scheduler(
             FakeTime time, TransmitScheduler.Sender sender) {
         return new TransmitScheduler(
@@ -87,5 +133,11 @@ public class TransmitSchedulerTest {
 
     private static List<FragmentProtocol.Transmission> one(String reason, int value) {
         return List.of(new FragmentProtocol.Transmission("!12345678", new byte[] {(byte) value}, reason));
+    }
+
+    private static FragmentProtocol.Transmission transmission(int value, int bytes) {
+        byte[] payload = new byte[bytes];
+        payload[0] = (byte) value;
+        return new FragmentProtocol.Transmission("!12345678", payload, "data");
     }
 }

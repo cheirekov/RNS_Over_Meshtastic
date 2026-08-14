@@ -13,6 +13,48 @@ peer/path metadata and optional per-fragment Meshtastic routing ACK/NAK. A
 radio ACK is diagnostic information for one Meshtastic packet; it is not an
 LXMF delivery receipt.
 
+Version 0.1.9 waits for the Android BLE GATT write callback before removing a
+fragment from the bridge scheduler. A rejected or timed-out local write is
+retried at most twice and is exposed by the `local retries` counter; exhaustion
+increments `dropped` instead of silently reporting the fragment as sent.
+
+Version 0.1.10 adds `off`, `critical` and `all (diagnostic only)` ACK policies.
+Use `critical` for the next unicast reliability test. It requests a Meshtastic
+ACK only for the final fragment of each multi-fragment RNS frame and for
+fragment repair control traffic. Single-fragment RNS frames use Reticulum's own
+proof/retry behaviour. `all` reproduced severe queue/return-path contention
+and is not a normal operating profile.
+
+Version 0.1.11 moves TCP backpressure close to the constrained interface. At
+the default 2000 ms pacing the data queue holds one maximum-size RNS frame,
+instead of accepting roughly two minutes of traffic before slowing the local
+Sideband/Columba producer. Test this version with ACK `off` first; `critical`
+is a separate follow-up measurement.
+
+Version 0.1.12 adds diagnostics without changing the port 76 wire format or
+radio scheduling policy. It reports scheduler admission rejections separately
+from local send failures, including the rejected frame's fragment/byte size.
+It also reports active fragment assemblies, assemblies still awaiting their
+final fragment, known missing fragments, repair requests/retransmissions,
+expiry and duplicates.
+
+This distinction matters for files and images. Current Sideband releases use a
+high-speed Reticulum Backbone/TCP interface and can submit RNS resource frames
+far larger than the bridge's deliberately short LoRa queue horizon. Such a
+frame is rejected locally instead of being silently buffered for minutes; the
+0.1.12 `admission` line makes that condition explicit. File/resource transfer
+over the direct Android tunnel remains experimental until the Reticulum-facing
+MTU/bitrate mismatch is resolved.
+
+Version 0.1.13 separates MQTT origin from the final radio delivery mechanism,
+so a packet forwarded by MQTT and finally received over LoRa is shown as
+`MQTT→LoRa`. The PhoneAPI flag is labelled `OK-to-MQTT permission`: it permits
+uplink but does not prove that the radio has an active broker session. A
+completed inbound RNS frame can also wait in a volatile FIFO for up to five
+minutes while the local Sideband/Columba TCP client reconnects. The FIFO is
+bounded to 32 frames and 64 KiB, deduplicated and visible in status counters;
+it is deliberately not a persistent mailbox or LXMF propagation node.
+
 ## Reproducible build
 
 No Android SDK or Gradle installation is required on the host:

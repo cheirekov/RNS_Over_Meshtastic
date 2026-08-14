@@ -31,25 +31,31 @@ final class TransmitScheduler implements AutoCloseable {
         final int bytes;
         final long estimatedDrainMillis;
         final long backpressureEvents;
+        final long retryAttempts;
         final long rejectedFrames;
         final long failedFrames;
+        final String lastRejection;
 
         Snapshot(
                 int frames, int fragments, int bytes, long estimatedDrainMillis,
-                long backpressureEvents, long rejectedFrames, long failedFrames) {
+                long backpressureEvents, long retryAttempts, long rejectedFrames,
+                long failedFrames, String lastRejection) {
             this.frames = frames;
             this.fragments = fragments;
             this.bytes = bytes;
             this.estimatedDrainMillis = estimatedDrainMillis;
             this.backpressureEvents = backpressureEvents;
+            this.retryAttempts = retryAttempts;
             this.rejectedFrames = rejectedFrames;
             this.failedFrames = failedFrames;
+            this.lastRejection = lastRejection;
         }
     }
 
     private static final class Batch {
         final Deque<FragmentProtocol.Transmission> transmissions;
         final boolean control;
+        int localFailures;
 
         Batch(List<FragmentProtocol.Transmission> transmissions, boolean control) {
             this.transmissions = new ArrayDeque<>(transmissions);
@@ -89,8 +95,10 @@ final class TransmitScheduler implements AutoCloseable {
     private int pendingBytes;
     private long nextSendNanos;
     private long backpressureEvents;
+    private long retryAttempts;
     private long rejectedFrames;
     private long failedFrames;
+    private String lastRejection = "none";
 
     TransmitScheduler(
             int intervalMillis,
@@ -149,6 +157,11 @@ final class TransmitScheduler implements AutoCloseable {
         synchronized (lock) {
             if (!canEverFit(fragments, bytes, control)) {
                 rejectedFrames++;
+                lastRejection = rejectionDescription(
+                        control ? "control frame" : "data frame", fragments, bytes,
+                        control ? maxFragments : maxFragments - reservedControlFragments,
+                        control ? maxBytes : maxBytes - reservedControlBytes,
+                        "exceeds admission limit");
                 changed = snapshotLocked();
                 notifyChanged(changed);
                 return false;
@@ -156,6 +169,11 @@ final class TransmitScheduler implements AutoCloseable {
             while (!closed && !hasCapacity(fragments, bytes, control)) {
                 if (!waitForCapacity) {
                     rejectedFrames++;
+                    lastRejection = rejectionDescription(
+                            control ? "control frame" : "data frame", fragments, bytes,
+                            control ? maxFragments : maxFragments - reservedControlFragments,
+                            control ? maxBytes : maxBytes - reservedControlBytes,
+                            "queue full");
                     changed = snapshotLocked();
                     notifyChanged(changed);
                     return false;
@@ -202,18 +220,28 @@ final class TransmitScheduler implements AutoCloseable {
                     throw interrupted;
                 } catch (Exception error) {
                     Snapshot changed;
+                    boolean retry;
                     synchronized (lock) {
-                        int abandonedFragments = batch.transmissions.size();
-                        int abandonedBytes = batch.transmissions.stream().mapToInt(item -> item.payload.length).sum();
-                        pendingFrames--;
-                        pendingFragments -= abandonedFragments;
-                        pendingBytes -= abandonedBytes;
-                        failedFrames++;
+                        batch.localFailures++;
+                        retry = !closed && batch.localFailures < 3;
+                        if (retry) {
+                            retryAttempts++;
+                            (batch.control ? controlQueue : dataQueue).addFirst(batch);
+                        } else {
+                            int abandonedFragments = batch.transmissions.size();
+                            int abandonedBytes = batch.transmissions.stream()
+                                    .mapToInt(item -> item.payload.length).sum();
+                            pendingFrames--;
+                            pendingFragments -= abandonedFragments;
+                            pendingBytes -= abandonedBytes;
+                            failedFrames++;
+                        }
                         changed = snapshotLocked();
                         lock.notifyAll();
                     }
-                    listener.onFailure(transmission, error);
+                    if (!retry) listener.onFailure(transmission, error);
                     notifyChanged(changed);
+                    if (retry) time.sleepNanos(1_000_000_000L);
                     continue;
                 }
 
@@ -269,7 +297,15 @@ final class TransmitScheduler implements AutoCloseable {
         long estimate = pendingFragments == 0 ? 0 : (untilNext + afterFirst) / 1_000_000L;
         return new Snapshot(
                 pendingFrames, pendingFragments, pendingBytes, estimate,
-                backpressureEvents, rejectedFrames, failedFrames);
+                backpressureEvents, retryAttempts, rejectedFrames, failedFrames,
+                lastRejection);
+    }
+
+    private static String rejectionDescription(
+            String kind, int fragments, int bytes, int fragmentLimit, int byteLimit,
+            String reason) {
+        return kind + " " + fragments + " fragments/" + bytes + " bytes " + reason
+                + " " + fragmentLimit + " fragments/" + byteLimit + " bytes";
     }
 
     private static boolean isControl(FragmentProtocol.Transmission transmission) {

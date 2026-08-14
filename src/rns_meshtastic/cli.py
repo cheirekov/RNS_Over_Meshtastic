@@ -79,6 +79,10 @@ def _radio_info(args: argparse.Namespace) -> int:
         if metadata is not None:
             print(f"firmware={getattr(metadata, 'firmware_version', 'unknown')}")
         print(f"known_nodes={len(interface.nodesByNum)}")
+        local_node = interface.nodesByNum.get(node_num) or {}
+        device_metrics = local_node.get("deviceMetrics") or {}
+        print(f"channel_utilization={device_metrics.get('channelUtilization')!r}")
+        print(f"air_util_tx={device_metrics.get('airUtilTx')!r}")
         if args.node_id:
             target_id = format_node_id(args.node_id)
             node = interface.nodesByNum.get(parse_node_id(target_id))
@@ -109,6 +113,7 @@ def _radio_info(args: argparse.Namespace) -> int:
             print(f"region={region_name} ({lora.region})")
             print(f"modem_preset={preset_name} ({lora.modem_preset})")
             print(f"hop_limit={lora.hop_limit}")
+            print(f"override_duty_cycle={lora.override_duty_cycle}")
             print(f"config_ok_to_mqtt={lora.config_ok_to_mqtt}")
             print(f"ignore_mqtt={lora.ignore_mqtt}")
         print("channels:")

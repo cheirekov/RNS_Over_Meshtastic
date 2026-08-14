@@ -26,7 +26,6 @@ import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -53,7 +52,7 @@ public final class MainActivity extends Activity {
     private EditText allowedSources;
     private EditText fragmentBody;
     private EditText txInterval;
-    private CheckBox wantAck;
+    private Spinner ackPolicy;
     private TextView status;
 
     private final BroadcastReceiver statusReceiver = new BroadcastReceiver() {
@@ -115,9 +114,8 @@ public final class MainActivity extends Activity {
         add(form, "Fragment payload bytes", fragmentBody);
         txInterval = text("2000", true);
         add(form, "Global delay between Meshtastic transmissions (ms)", txInterval);
-        wantAck = new CheckBox(this);
-        wantAck.setText("Request Meshtastic radio ACK for unicast fragments (not an LXMF receipt)");
-        form.addView(wantAck);
+        ackPolicy = spinner(new String[] {"off", "critical", "all (diagnostic only)"});
+        add(form, "Meshtastic radio ACK policy (not an LXMF receipt)", ackPolicy);
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
@@ -176,7 +174,7 @@ public final class MainActivity extends Activity {
         allowedSources.setText(config.allowedSources);
         fragmentBody.setText(String.valueOf(config.fragmentBody));
         txInterval.setText(String.valueOf(config.txIntervalMillis));
-        wantAck.setChecked(config.wantAck);
+        select(ackPolicy, config.ackPolicy.equals("all") ? "all (diagnostic only)" : config.ackPolicy);
         status.setText(BridgeService.latestStatus(this));
         updateTransportFields();
         updateModeFields();
@@ -191,7 +189,7 @@ public final class MainActivity extends Activity {
                     selectedTransport.equals("tcp") ? integer(radioPort) : 4403,
                     selectedTransport.equals("ble") ? value(bleAddress) : "",
                     integer(localPort), integer(channel), integer(hops), selected(mode), value(gateway),
-                    integer(fragmentBody), integer(txInterval), wantAck.isChecked(), value(allowedSources));
+                    integer(fragmentBody), integer(txInterval), ackPolicyValue(), value(allowedSources));
             if (!ensurePermissions(config)) return;
             config.save(this);
             Intent service = new Intent(this, BridgeService.class).setAction(BridgeService.ACTION_START);
@@ -341,14 +339,19 @@ public final class MainActivity extends Activity {
     }
 
     private void updateModeFields() {
-        if (mode == null || gateway == null || allowedSources == null || wantAck == null) return;
+        if (mode == null || gateway == null || allowedSources == null || ackPolicy == null) return;
         boolean broadcast = selected(mode).equals("broadcast");
         gateway.setEnabled(!broadcast);
         gateway.setAlpha(broadcast ? 0.45f : 1.0f);
         allowedSources.setEnabled(broadcast);
         allowedSources.setAlpha(broadcast ? 1.0f : 0.45f);
-        wantAck.setEnabled(!broadcast);
-        wantAck.setAlpha(broadcast ? 0.45f : 1.0f);
+        ackPolicy.setEnabled(!broadcast);
+        ackPolicy.setAlpha(broadcast ? 0.45f : 1.0f);
+    }
+
+    private String ackPolicyValue() {
+        String value = selected(ackPolicy);
+        return value.startsWith("all") ? "all" : value;
     }
 
     private static void select(Spinner spinner, String value) {

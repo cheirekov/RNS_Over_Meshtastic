@@ -98,7 +98,7 @@ final class TcpPhoneApiTransport implements RadioTransport {
             }
             if (message.configOkToMqtt != null) {
                 mqttUplinkPermitted = message.configOkToMqtt;
-                listener.onRadioState(true, "Radio MQTT uplink permission: " + mqttUplinkPermitted);
+                listener.onRadioState(true, "Radio OK-to-MQTT permission: " + mqttUplinkPermitted);
             }
             if (message.queueStatus != null) {
                 deviceQueue.update(message.queueStatus);
@@ -113,7 +113,7 @@ final class TcpPhoneApiTransport implements RadioTransport {
                 listener.onRadioState(true, "PhoneAPI config loaded; reading node database");
             } else if (message.configCompleteId != null && message.configCompleteId == NODE_INFO_NONCE) {
                 listener.onRadioState(true, "PhoneAPI handshake complete as " + NodeId.format(localNode)
-                        + "; MQTT uplink permission: " + mqttUplinkPermitted);
+                        + "; OK-to-MQTT permission: " + mqttUplinkPermitted);
             }
             if (message.packet != null && ProtoCodec.isBridgePort(message.packet.port)) {
                 listener.onPacket(message.packet);
@@ -123,12 +123,12 @@ final class TcpPhoneApiTransport implements RadioTransport {
         }
     }
 
-    @Override public long send(byte[] payload, long destination) throws Exception {
+    @Override public long send(byte[] payload, long destination, boolean wantAck) throws Exception {
         if (localNode == 0) throw new IllegalStateException("radio identity is not available yet");
         int id = packetId.updateAndGet(previous -> previous == -1 ? 1 : previous + 1);
         byte[] message = ProtoCodec.toRadioPacket(
                 localNode, destination, id, config.channel, config.hops,
-                config.wantAck && destination != NodeId.BROADCAST,
+                wantAck && destination != NodeId.BROADCAST,
                 mqttUplinkPermitted, payload);
         if (!deviceQueue.acquire(45_000)) throw new IllegalStateException("Meshtastic device TX queue unavailable or full for 45 seconds");
         try {

@@ -107,8 +107,9 @@ BLE PhoneAPI handshake complete as !a1b3b3b8
 Reticulum listening on 127.0.0.1:7822
 ```
 
-При версия 0.1.4 първият ред завършва с
-`MQTT uplink permission: true` или `false`, прочетено директно от radio-то.
+При версия 0.1.13 първият ред завършва с
+`OK-to-MQTT permission: true` или `false`, прочетено директно от radio-то.
+Това е разрешение за uplink, а не доказателство за активна MQTT broker сесия.
 
 Само появата на име/MAC в scan-а не означава BLE връзка. Системният Android
 Bluetooth екран също не е надежден индикатор за активна GATT сесия. Решаващият
@@ -145,8 +146,11 @@ auto-PKI DM носи изрично намерението на собствен
 Status-ът показва `radio queue` във frames/fragment-и/байтове, приблизителен
 `drain`, `device TX queue`, брояч `backpressure` и `dropped`. PhoneAPI
 `queue_status` спира подаването, когато firmware TX опашката е пълна. Показаните
-от Sideband/Columba `10 Mbps` остават оценка на локалния TCP endpoint, а не на
-LoRa сегмента.
+от Sideband/Columba `10 Mbps` са фиксираната оценка на локалния TCP endpoint, а
+не на LoRa сегмента. RNS използва оценката и за начални timeout-и, затова
+Android 0.1.11 държи само около 8 секунди radio работа и прилага TCP
+backpressure близо до входа. `backpressure` вече може нормално да нараства при
+burst и не означава загуба; `dropped` трябва да остане нула.
 
 За недвусмислен BLE тест след появата на `BLE PhoneAPI handshake complete as
 !a1b3b3b8` изключете Wi-Fi и mobile data само на Phone A. Loopback
@@ -227,6 +231,65 @@ allowed_nodes = !a1b3b3b8
 
 ## Диагностика по слоеве
 
+### Android 0.1.12 remote-path matrix
+
+0.1.12 не променя radio поведението. Новите редове трябва да се снимат и на
+двата края преди и след всяка серия:
+
+```text
+reassembly: ... active, ... awaiting final, ... missing; completed: ...,
+  repair REQ: ..., retransmits: ..., expired: ..., duplicates: ...
+admission: ... rejected, ... send-failed; last reject: ...
+```
+
+За тест между местния BLE radio и radio в друг град използвайте първо
+`gateway_unicast`, `fragment body = 200`, `delay = 2000 ms`, ACK `critical` и
+изключен duty-cycle override. Не започвайте с изображение или crossing traffic.
+
+1. **Endpoint MQTT baseline:** включете MQTT на двата крайни radio възела.
+   Изпратете `MQ-A-COLD`, изчакайте до 90 s, после `MQ-A-WARM`; повторете в
+   обратната посока. Това минимизира зависимостта от неизвестната междуградска
+   LoRa връзка.
+2. **Local RF ingress:** изключете MQTT само на местния endpoint, оставете
+   близкия публичен gateway и отдалечения endpoint/MQTT активни. Повторете с
+   `GW-A-COLD/WARM` и обратно. Това измерва LoRa → nearby gateway → MQTT →
+   remote radio, но е доказано само ако remote metadata отчете MQTT.
+3. Едва след две чисти one-way серии изпратете пет кратки текста в една посока
+   с 15 s между тях, после пет в обратната. Crossing серията е последна.
+
+Приемлив кратък run има `admission rejected = 0`, `send-failed = 0`, без
+`DUTY_CYCLE_LIMIT`, и `active/awaiting final/missing` се връщат до нула.
+Нарастващо `awaiting final` локализира изгубен final fragment; `missing > 0` с
+растящ `repair REQ` показва работеща, но натоварена repair логика; `expired > 0`
+означава незавършен frame. Ако RX frames растат, но LXMF не се появява,
+проблемът вече е над bridge reassembly слоя.
+
+Не използвайте изображения за тази матрица. Sideband Backbone/TCP може да
+подаде multi-KiB RNS resource frame, който не се побира в кратката LoRa queue.
+0.1.12 ще го покаже като `admission ... exceeds admission limit`; това е
+Reticulum-facing MTU/bitrate проблем, не резултат от междуградския radio тест.
+
+### Android 0.1.13 combined reconnect acceptance
+
+Този един тест заменя допълнителните MQTT permutation серии:
+
+1. На двата края задайте `gateway_unicast`, body `200`, delay `2000 ms` и ACK
+   `critical`. Потвърдете с по един уникален кратък текст във всяка посока.
+2. На единия телефон спрете само Sideband/Columba; Android bridge-ът и radio-то
+   трябва да останат активни.
+3. От другия край изпратете един уникален кратък текст и изчакайте status-ът на
+   приемащия bridge да покаже `inbound spool: 1/... frames`.
+4. Стартирайте отново същия Reticulum client. Очаквайте
+   `replayed 1 buffered frame(s)`, spool `0`, `rejected: 0` и съобщението в
+   клиента. Не изпращайте втори пакет, докато replay-ят не приключи.
+5. Ако последният RX ред е `MQTT→LoRa`, това означава MQTT произход с финален
+   LoRa ingress. Само `MQTT` означава директно предаване от firmware MQTT
+   транспорта; `OK-to-MQTT permission: true` само разрешава uplink.
+
+Тестът покрива path label, кратък client disconnect, FIFO replay и новите
+delivery counters. Петминутният volatile spool не е offline mailbox; за
+устойчиво store-and-forward се използва LXMF propagation node (`lxmd`).
+
 | Симптом | Най-вероятна причина |
 |---|---|
 | BLE radio не се вижда | още е свързано с Meshtastic app или не advertising-ва |
@@ -260,8 +323,10 @@ pacing и видими drain/backpressure/dropped counters.
 2. Изпратете последователно 10 кратки текста. `radio queue` може временно да
    расте, а `backpressure` може да се увеличи — това е нормално ограничаване на
    бързия loopback TCP producer. `dropped` трябва да остане `0`.
-3. Изчакайте пълно изпразване и изпратете едно изображение 1–4 KiB. Не
-   изпращайте втори файл, докато `radio queue` не стане нула.
+3. Не използвайте изображение като queue acceptance с актуален Sideband
+   Backbone client. Дори малък файл може да бъде опакован в multi-KiB RNS
+   resource frame. При отделен диагностичен опит следете 0.1.12 `admission`;
+   всеки reject прави крайния resource transfer невалиден.
 4. Следете `device TX queue: FREE/MAX free`. Стойност `0/MAX` може да се появи
    временно; scheduler-ът трябва да продължи, когато firmware докладва свободен
    slot, без `full for 45 seconds` error.
@@ -273,10 +338,34 @@ pacing и видими drain/backpressure/dropped counters.
 профил и двупосочният overhead надвишават практичния капацитет на този shared
 LoRa сегмент.
 
-## Android 0.1.8 reciprocal unicast и ACK telemetry
+## Android 0.1.12 reciprocal unicast, backpressure и ACK telemetry
 
 Този тест е без Linux gateway. Двата Android bridge-а използват отделни
 Meshtastic radios и сочат взаимно към Node ID на другото radio.
+
+Използвайте 0.1.12 и на двата телефона. Версията изчаква успешния BLE GATT write
+callback, преди да отчете fragment като предаден към radio. `local retries`
+трябва да остане 0 при стабилна връзка; увеличение означава локален BLE/TCP
+handoff retry, а не RF retransmission.
+
+Преди теста проверете duty-cycle състоянието. За `EU_868` Meshtastic прилага
+10% TX airtime върху rolling 60-minute прозорец. Не включвайте
+`override_duty_cycle`. При TCP radio, докато bridge-ът е спрян, изпълнете:
+
+```bash
+uv run rns-meshtastic radio-info --tcp-host RADIO_IP
+```
+
+Запишете `air_util_tx`, `channel_utilization` и
+`override_duty_cycle=False`. При BLE-only radio вижте Device Metrics в
+Meshtastic клиента, след което го разкачете преди bridge-а. За сравнителен тест
+започнете с `air_util_tx < 5%` и idle `channel_utilization < 10%`, за да има
+достатъчно headroom. Channel utilization е кратък rolling прозорец и не е
+същата метрика като часовия TX duty cycle. Поставете теста на пауза при 25% и
+го прекратете при 40%; първо изчакайте поне 90 секунди без нов LXMF трафик и
+измерете новия idle baseline. Ако bridge status покаже
+`last: DUTY_CYCLE_LIMIT (9)`, прекратете серията и изчакайте срока, посочен от
+firmware; това не е RF загуба и не трябва да се заобикаля с override.
 
 ### Фаза A — pure LoRa, ACK изключен
 
@@ -286,7 +375,7 @@ Meshtastic radios и сочат взаимно към Node ID на другот�
 3. На phone A задайте `gateway_unicast` и Node ID на radio B; на phone B
    задайте същия режим и Node ID на radio A.
 4. Използвайте еднакъв IFAC в двата Reticulum клиента и оставете
-   **Request Meshtastic radio ACK** изключено.
+   `Meshtastic radio ACK policy = off`.
 5. Направете announce A→B, кратък LXMF текст A→B и отговор B→A.
 6. На двата bridge-а очаквайте да растат едновременно:
 
@@ -299,17 +388,26 @@ RX mesh→RNS: ... frames / ... fragments
 предоставя, `LoRa`, PKI/channel encryption, hops, SNR и RSSI. Редът за radio ACK
 трябва да казва `disabled`; LXMF delivery proof продължава да работи независимо.
 
-### Фаза B — pure LoRa, ACK включен
+### Фаза B — pure LoRa, critical ACK
 
-1. Изчакайте radio queue да стане празна.
-2. Включете **Request Meshtastic radio ACK for unicast fragments** на двата
-   bridge-а и натиснете **Save & start**.
-3. Изпратете само един кратък LXMF текст във всяка посока.
-4. `confirmed` трябва да нарасне за потвърдените Meshtastic fragments, а
+1. Изчакайте radio queue да стане празна и на двата телефона. Не започвайте при
+   ненулев `drain` или докато предишни LXMF proofs още се връщат.
+2. Изберете `Meshtastic radio ACK policy = critical` на двата bridge-а и
+   натиснете **Save & start**. Не използвайте `all`; той е само диагностичен
+   stress режим и вече е показал тежко congestion поведение.
+3. Изчакайте отново PhoneAPI handshake и `Reticulum client connected from
+   loopback` и на двата края.
+4. Изпратете само един кратък LXMF текст A→B. Изчакайте queue и `pending` да
+   станат нула и запишете двата status блока. Едва тогава изпратете един текст
+   B→A и повторете записа. Не изпращайте двете посоки едновременно.
+5. `confirmed` трябва да нарасне за потвърдените Meshtastic fragments, а
    `pending` да се върне до нула. Броят е по radio fragment, не по LXMF message.
-5. Explicit `NAK` с име като `NO_ROUTE`, `MAX_RETRANSMIT`, `PKI_FAILED` или
+6. Explicit `NAK` с име като `NO_ROUTE`, `MAX_RETRANSMIT`, `PKI_FAILED` или
    `RATE_LIMIT_EXCEEDED` е реална radio грешка. `unknown` означава, че ACK не е
    наблюдаван до timeout; не доказва, че LXMF съобщението не е пристигнало.
+7. Запишете `local retries` поотделно на BLE и TCP края. Стойност над нула на
+   BLE края доказва локален GATT handoff проблем; `confirmed/NAK/unknown`
+   описват следващия Meshtastic radio слой.
 
 Запишете за всеки опит двата bridge status блока и действителния LXMF delivery
 status. Това позволява да сравним radio ACK с крайния Reticulum/LXMF резултат.
