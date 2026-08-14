@@ -13,6 +13,13 @@ public class BridgeConfigTest {
                 "inherit", "constrained_auto");
     }
 
+    private static BridgeConfig autoSinglePeer() {
+        return new BridgeConfig(
+                "tcp", "192.0.2.1", 4403, "", 7822,
+                1, 3, "auto_single_peer", "!aabbcc11", 200, 2000, "adaptive", "",
+                "force_off", "constrained_auto");
+    }
+
     @Test public void emptyBroadcastAllowlistAcceptsAnySource() {
         assertTrue(broadcast("").acceptsSource("!aabbcc11"));
     }
@@ -39,6 +46,14 @@ public class BridgeConfigTest {
                 0, 3, "broadcast", "", 200, 2000, "off", "",
                 "force_off", "constrained_auto");
         assertFalse(forcedOff.allowsMqttForwarding(true));
+    }
+
+    @Test public void autoSinglePeerBroadcastsAnnouncesAndUnicastsOtherFrames() {
+        BridgeConfig config = autoSinglePeer();
+        assertTrue(config.acceptsSource("!aabbcc11"));
+        assertFalse(config.acceptsSource("!11223344"));
+        assertTrue(config.outboundDestination(true).equals("^all"));
+        assertTrue(config.outboundDestination(false).equals("!aabbcc11"));
     }
 
     @Test public void criticalAckProtectsFinalAndRepairFragmentsOnly() {

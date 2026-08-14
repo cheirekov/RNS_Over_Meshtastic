@@ -115,7 +115,7 @@ public final class MainActivity extends Activity {
         add(form, "MQTT forwarding permission for bridge packets", mqttForwardingPolicy);
         trafficProfile = spinner(new String[] {"constrained_auto", "transparent"});
         add(form, "LoRa traffic scheduling profile", trafficProfile);
-        mode = spinner(new String[] {"gateway_unicast", "broadcast"});
+        mode = spinner(new String[] {"auto_single_peer", "gateway_unicast", "broadcast"});
         add(form, "Radio addressing mode", mode);
         gateway = text("!8fd13c64", false);
         add(form, "Unicast peer / gateway Meshtastic Node ID", gateway);

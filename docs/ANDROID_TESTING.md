@@ -536,6 +536,35 @@ delay, не Meshtastic duty-cycle override. Нито data, proof, link, нито
 диагностика и същия FIFO ред, но изключва soft QueueStatus pacing, тоест дава
 пряко сравнение със scheduler поведението на 0.1.18.
 
+### Фаза G — 0.1.21 auto single-peer
+
+Тази фаза използва същите две radio устройства в една стая и остава pure-LoRa:
+`force_off`, channel slot 1, hop limit 0, body 200, interval 2000 ms,
+`constrained_auto` и ACK `off`. На двата bridge-а изберете
+`auto_single_peer`; в peer полето на A въведете Node ID на B, а на B — Node ID
+на A.
+
+1. Стартирайте двата bridge-а и двата Reticulum клиента.
+2. Направете един announce само от A и изчакайте да се появи при B.
+3. Направете един announce само от B и изчакайте да се появи при A.
+4. Изпратете един кратък текст A→B и изчакайте delivery proof.
+5. Изпратете един кратък текст B→A и изчакайте delivery proof.
+6. Копирайте diagnostics преди спиране на клиента или bridge-а.
+
+Acceptance:
+
+- topology съдържа `auto single-peer (announce broadcast, other RNS unicast)`;
+- `addressing broadcast/unicast` има поне един broadcast frame и ненулев
+  unicast брой на всеки край;
+- последните data/proof packets са `PKI` и са адресирани към локалния radio;
+- и двете съобщения и proof-ове пристигат;
+- няма admission/device reject, local retry, drop или expired assembly;
+- `scheduler: RNS FIFO causal order` остава активен.
+
+Този режим няма broadcast retry при radio ACK timeout и не научава други
+peer-ове. При regression върнете двата bridge-а директно на доказания
+`broadcast` setup; не променяйте едновременно pacing, ACK или MQTT policy.
+
 ## След успешния първи тест
 
 Преди по-дълго използване:

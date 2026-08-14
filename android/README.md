@@ -104,6 +104,14 @@ queue thresholds, capped at eight seconds. Select `transparent` for FIFO with
 the configured fixed base interval. Neither profile rewrites or discards RNS
 frames.
 
+Version 0.1.21 adds the bounded `auto_single_peer` addressing mode. It does not
+reorder, delay by packet type or inspect LXMF content. RNS announces use the
+configured channel broadcast, while every other RNS frame uses Meshtastic
+unicast to the explicitly configured peer Node ID. Inbound port 76 traffic is
+accepted only from that peer and only when addressed to broadcast or the local
+radio. Diagnostics count accepted outbound broadcast and unicast RNS frames
+separately. There is no automatic broadcast fallback after an ACK timeout.
+
 ## Reproducible build
 
 No Android SDK or Gradle installation is required on the host:

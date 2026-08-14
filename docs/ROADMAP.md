@@ -427,6 +427,18 @@ QueueStatus soft pacing: +1x/+2x/+3x от configured base interval при
 base interval. И двата режима запазват RNS wire bytes, fragmentation, repair,
 ACK semantics и regulatory duty-cycle настройките.
 
+Повторният same-room тест с 0.1.20 потвърждава FIFO възстановяването и payload
+delivery, но не затваря delivery-proof acceptance. При crossing burst от пет
+бързи съобщения във всяка посока payload-ите са пристигнали. В посока A→B
+първите четири са получили delivery status приблизително до пристигането на
+четвъртото, докато съобщенията B→A са пристигнали без нито един наблюдаван
+proof при изпращача. Това е асиметричен обратен proof path под едновременен
+broadcast товар, а не доказана payload загуба. Предоставените diagnostics са
+копирани след нова/празна bridge сесия (`Reticulum listening`, всички counters
+0), затова не могат да разграничат закъснял от изгубен proof. 0.1.21
+`auto_single_peer` е следващият контролиран експеримент именно защото изпраща
+data и proof с PKI unicast, без да променя FIFO реда.
+
 ## Приоритет 1 — измерена delivery policy
 
 Преди автоматизация се записват за кратък frame, няколко fragments и единичен
@@ -450,6 +462,13 @@ receipt остават по-високите и авторитетни нива 
 3. fragment repair и Reticulum proof за надеждност;
 4. без автоматичен broadcast retry само защото ACK е изтекъл — ACK отговорът
    също може да бъде изгубен.
+
+Android 0.1.21 реализира първата bounded версия. Един изрично конфигуриран
+Meshtastic Node ID е единственият допустим peer. RNS announce рамките се
+изпращат по channel broadcast, а data/link/proof рамките — чрез Meshtastic
+unicast към peer-а. Всички рамки остават в първоначалния FIFO ред. Входящият
+port 76 филтър допуска от този peer само broadcast или пакети до локалното
+radio. Няма learned peers, broadcast resend или промяна на RNS/LXMF bytes.
 
 Bridge-ът не класифицира текст, файл, локация или voice note. RNS/IFAC payload
 може да е криптиран и transport слоят не трябва да разбира LXMF съдържание.

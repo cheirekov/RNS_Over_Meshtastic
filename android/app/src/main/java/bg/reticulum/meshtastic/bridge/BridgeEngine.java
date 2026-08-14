@@ -34,6 +34,8 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     private final int maxQueuedFragments;
     private final int maxQueuedBytes;
     private final AtomicLong rnsToMesh = new AtomicLong();
+    private final AtomicLong broadcastRnsToMesh = new AtomicLong();
+    private final AtomicLong unicastRnsToMesh = new AtomicLong();
     private final AtomicLong fragmentsToMesh = new AtomicLong();
     private final AtomicLong fragmentsFromMesh = new AtomicLong();
     private final AtomicLong deviceRejects = new AtomicLong();
@@ -116,6 +118,8 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
             handleRoutingResponse(packet, source);
             return;
         }
+        if (config.mode.equals("auto_single_peer")
+                && !acceptsAutoDestination(packet, localNode)) return;
         boolean requireLocalDestination = config.mode.equals("gateway_unicast");
         if (!acceptsInbound(packet, config.channel, localNode, requireLocalDestination)) return;
         fragmentsFromMesh.incrementAndGet();
@@ -158,6 +162,11 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
         return packet.pkiEncrypted && localNode != 0 && packet.destination == localNode;
     }
 
+    static boolean acceptsAutoDestination(ProtoCodec.RadioPacket packet, long localNode) {
+        return packet.destination == NodeId.BROADCAST
+                || (localNode != 0 && packet.destination == localNode);
+    }
+
     @Override public void onClientState(boolean connected, String detail) {
         clientState = detail;
         publish();
@@ -165,13 +174,16 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
 
     @Override public void onFrame(byte[] frame) {
         try {
-            List<FragmentProtocol.Transmission> transmissions = fragments.encode(frame, config.outboundDestination());
+            String destination = config.outboundDestination(isAnnounceFrame(frame));
+            List<FragmentProtocol.Transmission> transmissions = fragments.encode(frame, destination);
             // Preserve the exact order emitted by the local RNS instance. Packet
             // type is telemetry only; it is not sufficient to infer dependencies
             // between an announce, data frame and proof at this transparent edge.
             if (queueTransmissions(
                     transmissions, true, TransmitScheduler.PRIORITY_NORMAL)) {
                 rnsToMesh.incrementAndGet();
+                if (destination.equals("^all")) broadcastRnsToMesh.incrementAndGet();
+                else unicastRnsToMesh.incrementAndGet();
                 traffic.recordFrame(true, frame);
             }
             publish();
@@ -260,6 +272,8 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                         + "\ntraffic scheduling: " + config.trafficProfile
                         + "\nTX RNS→mesh: " + rnsToMesh.get() + " frames / "
                         + fragmentsToMesh.get() + " fragments"
+                        + "; addressing broadcast/unicast " + broadcastRnsToMesh.get()
+                        + "/" + unicastRnsToMesh.get() + " frames"
                         + "\nRX mesh→bridge: " + reassembly.completedFrames + " frames / "
                         + fragmentsFromMesh.get() + " fragments; last: " + lastRxState
                         + "\n" + trafficSnapshot.frameMix
@@ -332,6 +346,10 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
 
     private String topologySummary() {
         if (config.mode.equals("broadcast")) return "broadcast from " + localNodeLabel();
+        if (config.mode.equals("auto_single_peer")) {
+            return localNodeLabel() + " ↔ " + config.gateway
+                    + " auto single-peer (announce broadcast, other RNS unicast)";
+        }
         return localNodeLabel() + " ↔ " + config.gateway + " fixed unicast";
     }
 
@@ -339,6 +357,10 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
 
     private boolean constrainedScheduling() {
         return config.trafficProfile.equals("constrained_auto");
+    }
+
+    static boolean isAnnounceFrame(byte[] frame) {
+        return frame != null && frame.length > 0 && (frame[0] & 0x03) == 1;
     }
 
     private int deviceQueuePeakUsed() {

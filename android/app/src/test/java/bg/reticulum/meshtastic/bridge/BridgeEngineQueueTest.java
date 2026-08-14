@@ -1,6 +1,8 @@
 package bg.reticulum.meshtastic.bridge;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -34,9 +36,30 @@ public class BridgeEngineQueueTest {
         assertEquals("unicast UDP", BridgeEngine.transportLabel(packet(false, 8)));
     }
 
+    @Test public void classifiesOnlyRnsAnnouncesForAutoBroadcast() {
+        assertFalse(BridgeEngine.isAnnounceFrame(new byte[] {0}));
+        assertTrue(BridgeEngine.isAnnounceFrame(new byte[] {1}));
+        assertFalse(BridgeEngine.isAnnounceFrame(new byte[] {2}));
+        assertFalse(BridgeEngine.isAnnounceFrame(new byte[] {3}));
+        assertFalse(BridgeEngine.isAnnounceFrame(new byte[0]));
+    }
+
+    @Test public void autoModeAcceptsOnlyBroadcastOrLocallyAddressedPackets() {
+        long local = 0xa1b3b3b8L;
+        assertTrue(BridgeEngine.acceptsAutoDestination(packetTo(NodeId.BROADCAST), local));
+        assertTrue(BridgeEngine.acceptsAutoDestination(packetTo(local), local));
+        assertFalse(BridgeEngine.acceptsAutoDestination(packetTo(0x11223344L), local));
+        assertFalse(BridgeEngine.acceptsAutoDestination(packetTo(local), 0));
+    }
+
     private static ProtoCodec.RadioPacket packet(boolean viaMqtt, int transport) {
         return new ProtoCodec.RadioPacket(
                 1, 2, 0, ProtoCodec.RETICULUM_PORT, new byte[] {1}, true,
                 0, 0, null, null, null, 3, 2, viaMqtt, transport);
+    }
+
+    private static ProtoCodec.RadioPacket packetTo(long destination) {
+        return new ProtoCodec.RadioPacket(
+                1, destination, 1, ProtoCodec.RETICULUM_PORT, new byte[] {1}, true);
     }
 }

@@ -35,7 +35,8 @@ Sideband / Columba / other RNS client
 The Linux/NixOS implementation provides:
 
 - a native Meshtastic radio backend over TCP PhoneAPI, serial or BLE;
-- broadcast and configurable gateway-unicast addressing modes;
+- broadcast, configurable gateway-unicast and bounded single-peer automatic
+  addressing modes;
 - one logical Reticulum child interface per unicast Meshtastic peer;
 - a Reticulum TCP server for LAN/VPN clients without their own radio;
 - a binary MQTT virtual node using Meshtastic `ServiceEnvelope` protobufs;
@@ -43,7 +44,7 @@ The Linux/NixOS implementation provides:
   bounded retransmission cache;
 - optional Reticulum IFAC isolation with `network_name` and `passphrase`.
 
-Android bridge 0.1.20 provides:
+Android bridge 0.1.21 provides:
 
 - a direct BLE or TCP PhoneAPI connection without depending on the official
   Meshtastic Android app;
@@ -51,6 +52,9 @@ Android bridge 0.1.20 provides:
   clients on the same phone;
 - gateway-unicast operation through a Linux radio and direct broadcast
   operation between Android radios without a Linux gateway;
+- an `auto_single_peer` mode that broadcasts only RNS announces and sends all
+  later data/link/proof frames by Meshtastic unicast to one configured peer,
+  while preserving the original RNS FIFO order;
 - global LoRa fragment pacing, bounded frame/fragment/byte queues, TCP
   backpressure, retransmission reserve and Meshtastic `queue_status` flow
   control;
@@ -153,9 +157,9 @@ Work after the MVP is deliberately measurement-driven:
 3. Field-validate the new radio ACK/NAK telemetry against Reticulum/LXMF proofs
    and tune the constrained return path without treating an ACK timeout as
    proof that the payload was not delivered.
-4. Evaluate an adaptive profile: broadcast for discovery/announces and
-   Meshtastic PKI unicast for known peers, without weakening Reticulum's own
-   routing and security model.
+4. Field-validate the bounded `auto_single_peer` profile: channel broadcast for
+   announces and Meshtastic PKI unicast for all other RNS frames to one
+   explicitly configured peer. Multi-peer learning remains a later design.
 5. Add LXMF-level store-and-forward through a propagation node. Persistent
    replay of arbitrary raw Reticulum frames is intentionally not the design.
 6. Evaluate multiple Linux radios first as active/passive failover or receive

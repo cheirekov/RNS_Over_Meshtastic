@@ -93,7 +93,11 @@ final class BridgeConfig {
                 .apply();
     }
 
-    String outboundDestination() { return mode.equals("broadcast") ? "^all" : gateway; }
+    String outboundDestination(boolean announce) {
+        if (mode.equals("broadcast")) return "^all";
+        if (mode.equals("auto_single_peer") && announce) return "^all";
+        return gateway;
+    }
 
     boolean allowsMqttForwarding(boolean radioAllows) {
         return mqttForwardingPolicy.equals("inherit") && radioAllows;
@@ -131,8 +135,11 @@ final class BridgeConfig {
                 && !trafficProfile.equals("transparent")) {
             throw new IllegalArgumentException("Traffic profile must be constrained_auto or transparent");
         }
-        if (!mode.equals("broadcast") && !mode.equals("gateway_unicast")) throw new IllegalArgumentException("Invalid mode");
-        if (mode.equals("gateway_unicast")) NodeId.parse(gateway);
+        if (!mode.equals("broadcast") && !mode.equals("gateway_unicast")
+                && !mode.equals("auto_single_peer")) {
+            throw new IllegalArgumentException("Invalid mode");
+        }
+        if (!mode.equals("broadcast")) NodeId.parse(gateway);
         if (!ackPolicy.equals("adaptive") && !ackPolicy.equals("off")
                 && !ackPolicy.equals("critical") && !ackPolicy.equals("all")) {
             throw new IllegalArgumentException("ACK policy must be adaptive, off, critical or all");
