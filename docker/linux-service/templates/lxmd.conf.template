@@ -1,0 +1,22 @@
+[propagation]
+enable_node = yes
+node_name = $LXMD_NODE_NAME
+announce_interval = $LXMD_ANNOUNCE_INTERVAL
+announce_at_start = yes
+autopeer = $LXMD_AUTOPEER
+autopeer_maxdepth = 3
+max_peers = 4
+message_storage_limit = $LXMD_STORAGE_LIMIT_MB
+propagation_message_max_accepted_size = $LXMD_MESSAGE_MAX_KB
+propagation_sync_max_accepted_size = $LXMD_SYNC_MAX_KB
+sequential_pn_stamp_validation = yes
+max_inbound_syncs = 1
+auth_required = $LXMD_AUTH_REQUIRED
+
+[lxmf]
+display_name = $LXMD_DISPLAY_NAME
+announce_at_start = no
+delivery_transfer_max_accepted_size = 1
+
+[logging]
+loglevel = $LXMD_LOGLEVEL

@@ -1,0 +1,47 @@
+[reticulum]
+  enable_transport = Yes
+  share_instance = Yes
+  instance_name = meshtastic-linux-service
+
+[logging]
+  loglevel = $RNS_LOGLEVEL
+
+[interfaces]
+  [[Meshtastic radio hub]]
+    type = RNSMeshtasticInterface
+    enabled = Yes
+    mode = gateway
+
+    transport = native
+    connection = tcp
+    tcp_host = $MESHTASTIC_TCP_HOST
+    tcp_port = $MESHTASTIC_TCP_PORT
+    channel_index = $MESHTASTIC_CHANNEL_INDEX
+    hop_limit = $MESHTASTIC_HOP_LIMIT
+    mqtt_forwarding_policy = $MESHTASTIC_MQTT_FORWARDING_POLICY
+    tx_interval = 2.0
+    repair_request_budget = 12
+    repair_budget_window = 60.0
+
+    mesh_mode = $RNS_MESH_MODE
+    gateway_role = $RNS_GATEWAY_ROLE
+    $RNS_GATEWAY_NODE_LINE
+    accept_broadcast_on_hub = No
+    $RNS_ALLOWED_NODES_LINE
+    want_ack = No
+    pki_required = No
+
+    ifac_size = 128
+    network_name = $RNS_RADIO_IFAC_NAME
+    passphrase = $RNS_RADIO_IFAC_PASSPHRASE
+
+  [[LAN VPN Reticulum clients]]
+    type = TCPServerInterface
+    enabled = Yes
+    mode = gateway
+    listen_ip = 0.0.0.0
+    listen_port = $RNS_TCP_LISTEN_PORT
+
+    ifac_size = 128
+    network_name = $RNS_TCP_IFAC_NAME
+    passphrase = $RNS_TCP_IFAC_PASSPHRASE

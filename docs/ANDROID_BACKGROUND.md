@@ -1,6 +1,6 @@
 # Android background operation
 
-Android bridge 0.1.7 използва `connectedDevice` foreground service. Това е
+Android bridge използва `connectedDevice` foreground service. Това е
 дълготрайният Android режим за постоянна BLE или TCP връзка с външно
 устройство. Service-ът:
 
@@ -60,3 +60,7 @@ Sideband/Columba:
    notification и обменът трябва да останат.
 6. Запишете получени съобщения, LXMF delivery status, `backpressure`, `dropped`,
    максималната radio queue и приблизителния battery drain.
+7. Копирайте diagnostics в началото и края, без `Save & start` между тях.
+   `bridge session` трябва да е еднакъв, uptime да е нараснал, а неочакван
+   transport/client restart да се вижда в `radio up/down` и
+   `RNS client up/down`.

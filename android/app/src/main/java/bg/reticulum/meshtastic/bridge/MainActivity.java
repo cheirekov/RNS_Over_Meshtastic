@@ -82,7 +82,8 @@ public final class MainActivity extends Activity {
         form.setPadding(padding, padding, padding, padding);
 
         TextView title = new TextView(this);
-        title.setText("Reticulum ↔ Meshtastic");
+        title.setText("Reticulum ↔ Meshtastic " + BuildConfig.VERSION_NAME
+                + " (" + BuildConfig.VERSION_CODE + ")");
         title.setTextSize(24);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         form.addView(title);

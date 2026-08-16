@@ -1,0 +1,93 @@
+x-linux-environment: &linux-environment
+  MESHTASTIC_TCP_HOST: ${MESHTASTIC_TCP_HOST:?Set MESHTASTIC_TCP_HOST in the env file}
+  MESHTASTIC_TCP_PORT: ${MESHTASTIC_TCP_PORT:-4403}
+  MESHTASTIC_CHANNEL_INDEX: ${MESHTASTIC_CHANNEL_INDEX:-0}
+  MESHTASTIC_HOP_LIMIT: ${MESHTASTIC_HOP_LIMIT:-3}
+  MESHTASTIC_MQTT_FORWARDING_POLICY: ${MESHTASTIC_MQTT_FORWARDING_POLICY:-inherit}
+  RNS_MESH_MODE: ${RNS_MESH_MODE:-gateway_unicast}
+  RNS_GATEWAY_ROLE: ${RNS_GATEWAY_ROLE:-hub}
+  RNS_GATEWAY_NODE: ${RNS_GATEWAY_NODE:-}
+  RNS_ALLOWED_NODES: ${RNS_ALLOWED_NODES:-}
+  RNS_RADIO_IFAC_NAME: ${RNS_RADIO_IFAC_NAME:?Set a private radio-side IFAC name}
+  RNS_RADIO_IFAC_PASSPHRASE: ${RNS_RADIO_IFAC_PASSPHRASE:?Set a private radio-side IFAC passphrase}
+  RNS_TCP_IFAC_NAME: ${RNS_TCP_IFAC_NAME:?Set a different TCP-side IFAC name}
+  RNS_TCP_IFAC_PASSPHRASE: ${RNS_TCP_IFAC_PASSPHRASE:?Set a different TCP-side IFAC passphrase}
+  RNS_TCP_LISTEN_PORT: ${RNS_TCP_LISTEN_PORT:-4242}
+  RNS_LOGLEVEL: ${RNS_LOGLEVEL:-4}
+  LXMD_NODE_NAME: ${LXMD_NODE_NAME:-RNS Meshtastic Propagation}
+  LXMD_DISPLAY_NAME: ${LXMD_DISPLAY_NAME:-RNS Meshtastic Service}
+  LXMD_ANNOUNCE_INTERVAL: ${LXMD_ANNOUNCE_INTERVAL:-360}
+  LXMD_AUTOPEER: ${LXMD_AUTOPEER:-no}
+  LXMD_STORAGE_LIMIT_MB: ${LXMD_STORAGE_LIMIT_MB:-64}
+  LXMD_MESSAGE_MAX_KB: ${LXMD_MESSAGE_MAX_KB:-8}
+  LXMD_SYNC_MAX_KB: ${LXMD_SYNC_MAX_KB:-64}
+  LXMD_AUTH_REQUIRED: ${LXMD_AUTH_REQUIRED:-no}
+  LXMD_ALLOWED_IDENTITIES: ${LXMD_ALLOWED_IDENTITIES:-}
+  LXMD_LOGLEVEL: ${LXMD_LOGLEVEL:-4}
+
+x-linux-service: &linux-service
+  build:
+    context: .
+    dockerfile: docker/linux-service/Dockerfile
+  environment: *linux-environment
+  volumes:
+    - rns-state:/data/rns
+    - lxmd-state:/data/lxmd
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  rnsd:
+    <<: *linux-service
+    command: ["rnsd", "--config", "/data/rns", "--verbose"]
+    restart: unless-stopped
+    ports:
+      - "${RNS_TCP_PUBLISH_IP:-127.0.0.1}:${RNS_TCP_LISTEN_PORT:-4242}:${RNS_TCP_LISTEN_PORT:-4242}"
+    healthcheck:
+      test: ["CMD", "rnstatus", "--config", "/data/rns", "--json"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    stop_grace_period: 30s
+
+  lxmd:
+    <<: *linux-service
+    command: ["lxmd", "--config", "/data/lxmd", "--rnsconfig", "/data/rns", "--propagation-node", "--verbose"]
+    network_mode: service:rnsd
+    depends_on:
+      rnsd:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  rns-status:
+    <<: *linux-service
+    profiles: ["tools"]
+    command: ["rnstatus", "--config", "/data/rns", "--all", "--totals"]
+    network_mode: service:rnsd
+    depends_on:
+      rnsd:
+        condition: service_healthy
+    restart: "no"
+
+  lxmd-status:
+    <<: *linux-service
+    profiles: ["tools"]
+    command: ["lxmd", "--config", "/data/lxmd", "--rnsconfig", "/data/rns", "--status"]
+    network_mode: service:rnsd
+    depends_on:
+      rnsd:
+        condition: service_healthy
+      lxmd:
+        condition: service_started
+    restart: "no"
+
+volumes:
+  rns-state:
+  lxmd-state:

@@ -112,6 +112,15 @@ accepted only from that peer and only when addressed to broadcast or the local
 radio. Diagnostics count accepted outbound broadcast and unicast RNS frames
 separately. There is no automatic broadcast fallback after an ACK timeout.
 
+Version 0.1.22 is an observability-only follow-up. The version and build code
+are visible in the main screen, and each bridge start gets an eight-character
+session ID with monotonic uptime plus radio and local-RNS-client up/down event
+counters. Repeated identical callbacks are coalesced, and an initially
+disconnected state is not counted as a disconnect. This distinguishes a real
+empty run from diagnostics copied after `Save & start`, service recreation or
+a transport reconnect. Radio framing, addressing, pacing and ACK behaviour are
+unchanged from 0.1.21.
+
 ## Reproducible build
 
 No Android SDK or Gradle installation is required on the host:

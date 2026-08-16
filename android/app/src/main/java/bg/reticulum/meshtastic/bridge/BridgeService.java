@@ -123,7 +123,7 @@ public final class BridgeService extends Service {
         PendingIntent stopIntent = PendingIntent.getService(this, 1, stop, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-                .setContentTitle(getString(R.string.app_name))
+                .setContentTitle(getString(R.string.app_name) + " " + BuildConfig.VERSION_NAME)
                 .setContentText(text.length() > 120 ? text.substring(0, 120) : text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setContentIntent(openIntent)

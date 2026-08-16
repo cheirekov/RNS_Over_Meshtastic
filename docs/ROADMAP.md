@@ -470,6 +470,27 @@ unicast към peer-а. Всички рамки остават в първона
 port 76 филтър допуска от този peer само broadcast или пакети до локалното
 radio. Няма learned peers, broadcast resend или промяна на RNS/LXMF bytes.
 
+Първият same-room pure-LoRa `auto_single_peer` run е положителен. При ACK off
+кратък двупосочен обмен и последващ crossing burst са доставени с end-to-end
+status за всички съобщения. Междинният Pixel report показва 6 broadcast
+announce и 3 unicast data/proof frames; последният входящ frame е proof през
+директен `LoRa, PKI, ch 0, 0 hops`. Две backpressure събития са очакваното
+ранно ограничаване на TCP producer-а, а един frame е replay-нат от bounded
+local spool след кратко client прекъсване.
+
+Post-storm Honor report затваря обратната посока: 22 TX RNS frames са точно
+`1 broadcast / 21 unicast`, с mix 11 data, 1 announce и 10 proof; RX съдържа
+10 data, 6 announce и 10 proof. Последният packet е директен LoRa PKI към
+локалното radio, channel context 0 и 0 hops. Bridge/device queues са празни,
+peak firmware occupancy е само 2/16 и няма backpressure, repair, retransmit,
+incomplete assembly, admission/device reject, local retry или drop. Нулевият
+rolling 60-second window означава, че report-ът е копиран след изтичане на
+прозореца, а cumulative counters пазят тестовия резултат.
+
+0.1.22 добавя видима app версия, уникален session ID, monotonic uptime и
+radio/RNS-client up/down counters. Това е само observability за background
+soak; 0.1.21 addressing и wire поведението не се променят.
+
 Bridge-ът не класифицира текст, файл, локация или voice note. RNS/IFAC payload
 може да е криптиран и transport слоят не трябва да разбира LXMF съдържание.
 Приоритети и quotas по съдържание принадлежат на клиента/LXMF услугата.
@@ -492,6 +513,34 @@ Linux остава незадължителен за директна Android в
 а не storage функция вътре в Android bridge или replay на сурови RNS frames.
 Връзка по IP към Linux се конфигурира като отделен Reticulum interface в
 клиента, когато той го поддържа; не се скрива вътре в radio bridge-а.
+
+Първата service-profile реализация вече е налична в `compose.linux.yaml`:
+
+- отделни `rnsd` и `lxmd` процеси в общ network namespace за shared RNS;
+- LXMF 1.1.1 и Python dependencies са заключени в `uv.lock`;
+- отделни persistent RNS/LXMF volumes и non-root, read-only containers без
+  Linux capabilities;
+- managed environment config с validation, различни radio/TCP IFAC-и и
+  задължителен hub allowlist;
+- localhost-only TCP publish по подразбиране, optional LXMF identity auth;
+- 64 MiB store, 8 KiB message и 64 KiB sync limits, един inbound sync и
+  `autopeer=no` по подразбиране;
+- еднократни `rns-status`/`lxmd-status`, backup/rollback и bounded offline
+  acceptance процедура в `docs/LINUX_SERVICE.md`.
+
+Това още не е field acceptance. Първо се доказват daemon health и кратък
+online text, след това един short-text offline propagation/sync цикъл. Файлове,
+voice notes, autopeering и публично излагане не участват в първия тест.
+
+Локалната container acceptance е завършена: build-ът от заключения `uv.lock`
+стартира `rnsd` 1.4.2 и `lxmd` 1.1.1 като UID 10001 върху read-only rootfs,
+`cap_drop: ALL` и `no-new-privileges`. Реалният read-only PhoneAPI startup към
+`172.16.19.176` разпозна radio `!8fd1336c`; `rnstatus` показа активни 500 bps
+Meshtastic, 10 Mbps TCP и shared-instance interfaces с отделни 128-bit IFAC-и.
+`lxmd --status` потвърди 64 MiB store, 8 KiB message limit, 64 KiB sync limit и
+нула peers/messages. RNS и LXMF identity/config файловете са mode 0600, а
+LXMF identity hash остана непроменен след daemon restart. Не е изпращан тестов
+radio payload. Остава реалният client online/offline propagation acceptance.
 
 ## Следващи, но не текущи задачи
 

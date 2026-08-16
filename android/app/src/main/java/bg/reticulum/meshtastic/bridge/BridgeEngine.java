@@ -43,6 +43,7 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     private final AckTracker acknowledgements = new AckTracker();
     private final AdaptiveAckPolicy adaptiveAck = new AdaptiveAckPolicy();
     private final RnsTrafficTelemetry traffic = new RnsTrafficTelemetry();
+    private final SessionTelemetry session = new SessionTelemetry(SystemClock.elapsedRealtime());
     private final ScheduledExecutorService ackScheduler = Executors.newSingleThreadScheduledExecutor();
     private final Object ackScheduleLock = new Object();
     private ScheduledFuture<?> ackSweep;
@@ -98,6 +99,7 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     }
 
     @Override public void onRadioState(boolean connected, String detail) {
+        session.recordRadio(connected);
         radioState = detail;
         if (!connected) acknowledgements.clearPending("radio disconnected");
         scheduleAckSweep();
@@ -168,6 +170,7 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     }
 
     @Override public void onClientState(boolean connected, String detail) {
+        session.recordClient(connected);
         clientState = detail;
         publish();
     }
@@ -262,10 +265,12 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
         FragmentProtocol.Snapshot reassembly = fragments.snapshot();
         ReticulumTcpServer.Snapshot client = reticulum.snapshot();
         AckTracker.Snapshot ack = acknowledgements.snapshot();
-        RnsTrafficTelemetry.Snapshot trafficSnapshot = traffic.snapshot(SystemClock.elapsedRealtime());
+        long now = SystemClock.elapsedRealtime();
+        RnsTrafficTelemetry.Snapshot trafficSnapshot = traffic.snapshot(now);
         long dropped = queue.dataRejectedFrames + queue.dataFailedFrames;
         String summary =
                 radioState + "\n" + clientState
+                        + "\n" + session.describe(now)
                         + "\ntopology: " + topologySummary() + ", local channel slot: " + config.channel
                         + "\nMQTT forwarding: " + config.mqttForwardingPolicy + " → "
                         + (radio.mqttForwardingAllowed() ? "allowed" : "denied")

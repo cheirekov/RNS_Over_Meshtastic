@@ -18,6 +18,7 @@ MQTT configuration. Configure radios with an official Meshtastic client first.
 | LoRa and MQTT validation | Complete for the documented scenarios | Pure LoRa, LoRa–MQTT–LoRa and MQTT virtual-node paths have been exercised. |
 | Direct phone-to-phone mode | Complete | Two Android bridges and two radios can communicate without a Linux gateway. |
 | Queue, power and background hardening | Active | Bounded queues, pacing and Android foreground operation are implemented; longer field tests continue. |
+| Linux LXMF propagation service | Implemented, field acceptance pending | Reproducible non-root `rnsd` + `lxmd` containers, persistent state and conservative quotas are available. |
 | Production readiness | Not claimed | Capacity limits, delivery behaviour and failure recovery still need wider measurement and soak testing. |
 
 ## Architecture and implemented capabilities
@@ -42,9 +43,11 @@ The Linux/NixOS implementation provides:
 - a binary MQTT virtual node using Meshtastic `ServiceEnvelope` protobufs;
 - legacy-compatible two-byte fragmentation, missing-fragment requests and a
   bounded retransmission cache;
-- optional Reticulum IFAC isolation with `network_name` and `passphrase`.
+- optional Reticulum IFAC isolation with `network_name` and `passphrase`;
+- an optional Docker service profile with separate `rnsd` and `lxmd` processes,
+  persistent identities/message storage and no host-side Python installation.
 
-Android bridge 0.1.21 provides:
+Android bridge 0.1.22 provides:
 
 - a direct BLE or TCP PhoneAPI connection without depending on the official
   Meshtastic Android app;
@@ -96,6 +99,9 @@ Android bridge 0.1.21 provides:
 - separate data/control admission counters and a **Copy diagnostics** report
   containing an ISO timestamp, app version, Android/device identity and the
   complete visible status without radio or IFAC secrets;
+- a visible app version plus per-start session ID, monotonic uptime and
+  duplicate-suppressed radio/RNS-client up/down counters for background soak
+  and restart diagnosis;
 - current and peak bridge/device queue occupancy, retained until the bridge is
   restarted so a post-test report does not lose the burst high-water mark;
 - a Reticulum frame-type breakdown and a rolling 60-second count of actual
@@ -139,7 +145,7 @@ The following have been exercised on real hardware and clients:
 - MQTT downlink with a non-zero hop limit on a broker whose deployment permits
   it, including a returned Meshtastic routing ACK.
 
-Automated validation currently contains 37 Python tests and 57 Android unit
+Automated validation currently contains 43 Python tests and 62 Android unit
 tests, in addition to Android lint and containerised APK builds. Exact,
 repeatable procedures and the distinction between native Meshtastic DM and the
 decoded MQTT virtual-node path are in [docs/TESTING.md](docs/TESTING.md).
@@ -160,8 +166,9 @@ Work after the MVP is deliberately measurement-driven:
 4. Field-validate the bounded `auto_single_peer` profile: channel broadcast for
    announces and Meshtastic PKI unicast for all other RNS frames to one
    explicitly configured peer. Multi-peer learning remains a later design.
-5. Add LXMF-level store-and-forward through a propagation node. Persistent
-   replay of arbitrary raw Reticulum frames is intentionally not the design.
+5. Field-validate the implemented LXMF propagation node with one bounded
+   offline short-text offer/retrieval cycle. Persistent replay of arbitrary raw
+   Reticulum frames is intentionally not the design.
 6. Evaluate multiple Linux radios first as active/passive failover or receive
    diversity. Same-channel bandwidth aggregation is not assumed to be safe or
    useful.
@@ -172,6 +179,10 @@ See [docs/CAPACITY_AND_STORE_FORWARD.md](docs/CAPACITY_AND_STORE_FORWARD.md)
 for the queueing, file, location, voice-note and multi-radio design assessment,
 and [docs/ANDROID_BACKGROUND.md](docs/ANDROID_BACKGROUND.md) for the current
 power model and soak-test checklist.
+
+The optional reproducible `rnsd` + `lxmd` Linux service profile, its conservative
+LoRa quotas, security boundary, backup procedure and offline-message acceptance
+test are documented in [docs/LINUX_SERVICE.md](docs/LINUX_SERVICE.md).
 
 The agreed milestone order and the boundary between bridge, Reticulum and LXMF
 responsibilities are fixed in [docs/ROADMAP.md](docs/ROADMAP.md).
