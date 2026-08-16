@@ -31,9 +31,7 @@
     want_ack = No
     pki_required = No
 
-    ifac_size = 128
-    network_name = $RNS_RADIO_IFAC_NAME
-    passphrase = $RNS_RADIO_IFAC_PASSPHRASE
+$RNS_RADIO_IFAC_BLOCK
 
   [[LAN VPN Reticulum clients]]
     type = TCPServerInterface
@@ -42,6 +40,4 @@
     listen_ip = 0.0.0.0
     listen_port = $RNS_TCP_LISTEN_PORT
 
-    ifac_size = 128
-    network_name = $RNS_TCP_IFAC_NAME
-    passphrase = $RNS_TCP_IFAC_PASSPHRASE
+$RNS_TCP_IFAC_BLOCK

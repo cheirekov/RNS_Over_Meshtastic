@@ -26,22 +26,37 @@ cp examples/linux-service.env.example .env.linux-service
 chmod 600 .env.linux-service
 ```
 
-Replace every `CHANGE-ME` value. At minimum set:
+At minimum set the radio host and hub allowlist:
 
 ```dotenv
 MESHTASTIC_TCP_HOST=192.0.2.10
 RNS_ALLOWED_NODES=!a1b3b3b8
+```
 
+Radio-side and TCP-side IFAC are independently optional. To disable one, leave
+both its name and passphrase empty. This is the simplest controlled baseline:
+
+```dotenv
+RNS_RADIO_IFAC_NAME=
+RNS_RADIO_IFAC_PASSPHRASE=
+RNS_TCP_IFAC_NAME=
+RNS_TCP_IFAC_PASSPHRASE=
+```
+
+For an IFAC-enabled deployment, set both values in each required pair. If both
+interfaces use IFAC, keep their credential pairs different:
+
+```dotenv
 RNS_RADIO_IFAC_NAME=private-radio-segment
 RNS_RADIO_IFAC_PASSPHRASE=long-random-radio-passphrase
 RNS_TCP_IFAC_NAME=private-vpn-segment
 RNS_TCP_IFAC_PASSPHRASE=different-long-random-vpn-passphrase
 ```
 
-The radio-side and TCP-side IFAC credentials must be different. The renderer
-rejects placeholders, missing unicast allowlists, malformed Node IDs, reused
-IFAC pairs and unsafe multiline/comment characters before either daemon starts.
-Secrets are not printed in logs or status helpers.
+The renderer rejects half-configured IFAC pairs, short/placeholding enabled
+passphrases, missing unicast allowlists, malformed Node IDs, reused IFAC pairs
+and unsafe multiline/comment characters before either daemon starts. Secrets
+are not printed in logs or status helpers.
 
 `gateway_unicast`/`hub` is the conservative default. `RNS_ALLOWED_NODES` is the
 comma-separated list of Android or other client radio Node IDs. Use `broadcast`
@@ -55,8 +70,9 @@ The TCP listener is published on host loopback by default. For a VPN address:
 RNS_TCP_PUBLISH_IP=172.16.16.10
 ```
 
-Do not publish port 4242 directly to the public Internet. Keep a host firewall
-and use the configured 128-bit TCP IFAC.
+Do not publish port 4242 directly to the public Internet. Without TCP IFAC,
+bind only to a trusted LAN/VPN address and enforce access with the host
+firewall. IFAC is strongly recommended beyond a controlled baseline.
 
 ## Start and inspect
 
@@ -96,7 +112,7 @@ These are admission limits, not an assertion that an 8 KiB transfer is
 practical over a busy LoRa mesh. Begin with short text. Files, images and voice
 notes remain a separate measured experiment.
 
-For a private IFAC-only pilot, `LXMD_AUTH_REQUIRED=no` is sufficient. If the
+For a private, controlled pilot, `LXMD_AUTH_REQUIRED=no` is sufficient. If the
 node becomes reachable outside that controlled RNS segment, set:
 
 ```dotenv
@@ -109,8 +125,8 @@ node, not Meshtastic Node IDs.
 
 ## Client and offline acceptance test
 
-1. Connect a Sideband/Columba client to the host/VPN TCP port with the TCP-side
-   IFAC. A radio-side client uses the separate radio IFAC.
+1. Connect a Sideband/Columba client to the host/VPN TCP port. When IFAC is
+   enabled on that interface, configure the matching credentials in the client.
 2. Wait for or request the LXMF propagation-node announce and select that node
    in the client's propagation-node settings.
 3. Exchange one ordinary online text first.
@@ -125,8 +141,9 @@ node, not Meshtastic Node IDs.
 
 ## Backup, upgrade and rollback
 
-The managed config contains IFAC secrets and the LXMF volume contains encrypted
-messages and node identity material. Store backups with restrictive access:
+The managed config can contain IFAC secrets, and the LXMF volume contains
+encrypted messages and node identity material. Store backups with restrictive
+access:
 
 ```bash
 mkdir -p backup/linux-service/rns backup/linux-service/lxmd

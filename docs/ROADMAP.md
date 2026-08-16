@@ -495,8 +495,45 @@ Bridge-ът не класифицира текст, файл, локация и�
 може да е криптиран и transport слоят не трябва да разбира LXMF съдържание.
 Приоритети и quotas по съдържание принадлежат на клиента/LXMF услугата.
 
-Пълен multi-peer auto режим изисква peer-aware Reticulum interfaces на Android,
-подобни на Linux hub child interfaces; това не е малка промяна на spinner-а.
+Android 0.2.0 добавя първата bounded multi-peer реализация без да се представя
+като Reticulum transport node. Bridge-ът поддържа volatile link-layer таблица
+`RNS hash → Meshtastic Node ID`: учи destination hash от announce, обратния
+packet hash за explicit proof и link ID/destination за link traffic. Познатите
+SINGLE/LINK destinations стават Meshtastic PKI unicast; announce, PLAIN/GROUP и
+непознатите destinations остават channel broadcast. Таблицата е ограничена до
+32 peers и 512 routes и изтича след 24 часа бездействие. Това дава discovery за
+3–4 Android bridge-а без Linux hub. Two-peer laboratory acceptance е завършен;
+остават реален трети peer и multi-hop field acceptance.
+
+IFAC header masking е ясна граница: bridge-ът вижда само opaque bytes и не може
+надеждно да научи RNS destination/link hash. 0.2.0 никога не класифицира такъв
+кадър по ciphertext; в multi-peer използва broadcast fallback и го отчита
+отделно. Explicit `auto_single_peer` остава unicast към зададения peer. Така
+IFAC остава функционален, но multi-peer unicast оптимизацията изисква тест без
+IFAC или бъдеща RNS-side интеграция.
+
+0.2.0 добавя и serialized-bulk admission за един по-голям RNS frame наведнъж,
+със запазен repair slot и TCP backpressure за следващия frame. При default
+200 B/2000 ms normal limit остава 600 B, а serialized limit е 8 KiB/около 82 s.
+Това е измерим експеримент за малки LXMF resources, не общо обещание за файлов
+transfer и не променя TCP bitrate/timeout несъответствието.
+
+Same-room pure-LoRa acceptance на 2026-08-16 потвърждава и двете промени.
+Двата bridge-а научиха съответно 96 и 158 routes към един peer, с `conflicts 0`,
+`unknown broadcasts 0` и `opaque-ifac 0`; 92/117 и 75/115 TX frames са
+изпратени по learned unicast. Картинки и PTT са доставени с крайни
+потвърждения. Serialized path-ът прие общо пет големи frames, включително
+3747 B/19 fragments и 7907 B/40 fragments, без oversize/admission/device
+reject, missing fragment, incomplete/expired assembly или local send failure.
+Наблюдаван е един retransmit без останала incomplete assembly; bounded spool
+replay при client reconnect е приключил без rejected или expired frame.
+
+`peak fragments 19/40` е размерът на един активен serialized frame, а не
+нарушение на normal `4 fragments` admission прозореца. `backpressure 58/55` е
+желаният механизъм, който държи следващите TCP frames зад бавния radio drain.
+Pixel session-ът има `radio up/down 3/2`; понеже няма drop/reassembly failure,
+това не блокира 0.2.0 acceptance, но BLE reconnect честотата остава метрика за
+следващия screen-off и multi-hop тест.
 
 ## Приоритет 3 — optional Linux service profile
 
@@ -520,8 +557,8 @@ Linux остава незадължителен за директна Android в
 - LXMF 1.1.1 и Python dependencies са заключени в `uv.lock`;
 - отделни persistent RNS/LXMF volumes и non-root, read-only containers без
   Linux capabilities;
-- managed environment config с validation, различни radio/TCP IFAC-и и
-  задължителен hub allowlist;
+- managed environment config с validation, независимо optional radio/TCP IFAC
+  и задължителен hub allowlist;
 - localhost-only TCP publish по подразбиране, optional LXMF identity auth;
 - 64 MiB store, 8 KiB message и 64 KiB sync limits, един inbound sync и
   `autopeer=no` по подразбиране;
@@ -542,9 +579,17 @@ Meshtastic, 10 Mbps TCP и shared-instance interfaces с отделни 128-bit 
 LXMF identity hash остана непроменен след daemon restart. Не е изпращан тестов
 radio payload. Остава реалният client online/offline propagation acceptance.
 
+След това е валидиран и explicit no-IFAC baseline: renderer-ът пропуска всички
+`ifac_size`, `network_name` и `passphrase` редове, а реалният стек отново вдига
+radio `!8fd1336c`, TCP server, shared instance и `lxmd`. Radio и TCP IFAC могат
+да се включват независимо; празни трябва да бъдат и двете полета на съответната
+двойка, за да няма двусмислена половин конфигурация.
+
 ## Следващи, но не текущи задачи
 
-- Android multi-peer child-interface архитектура;
+- Android three-peer и multi-hop field acceptance, route-conflict/expiry и BLE
+  reconnect измерване;
+- serialized resource multi-hop drain/timeout/ChUtil и oversize-boundary тест;
 - Linux multi-radio active/passive failover и receive diversity;
 - release packaging, NixOS service и production diagnostics;
 - по-широки Android OEM и firmware soak тестове.

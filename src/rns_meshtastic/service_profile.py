@@ -43,11 +43,35 @@ def _yes_no(environment: Mapping[str, str], name: str, default: str) -> str:
     return value
 
 
-def _secret(environment: Mapping[str, str], name: str) -> str:
-    value = _value(environment, name)
-    if value.startswith("CHANGE-ME") or len(value) < 12:
-        raise ValueError(f"{name} must be a non-placeholder value of at least 12 characters")
-    return value
+def _optional_value(environment: Mapping[str, str], name: str) -> str:
+    if not environment.get(name, "").strip():
+        return ""
+    return _value(environment, name)
+
+
+def _ifac_configuration(
+    environment: Mapping[str, str], prefix: str, description: str
+) -> tuple[str, str, str]:
+    name_variable = f"{prefix}_NAME"
+    passphrase_variable = f"{prefix}_PASSPHRASE"
+    name = _optional_value(environment, name_variable)
+    passphrase = _optional_value(environment, passphrase_variable)
+    if bool(name) != bool(passphrase):
+        raise ValueError(
+            f"{name_variable} and {passphrase_variable} must both be set or both be empty"
+        )
+    if not name:
+        return "", "", f"    # Reticulum IFAC disabled for the {description} interface"
+    if passphrase.startswith("CHANGE-ME") or len(passphrase) < 12:
+        raise ValueError(
+            f"{passphrase_variable} must be a non-placeholder value of at least 12 characters"
+        )
+    block = (
+        "    ifac_size = 128\n"
+        f"    network_name = {name}\n"
+        f"    passphrase = {passphrase}"
+    )
+    return name, passphrase, block
 
 
 def _node_list(environment: Mapping[str, str], mesh_mode: str, gateway_role: str) -> str:
@@ -82,11 +106,16 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
     if forwarding not in {"inherit", "force_off"}:
         raise ValueError("MESHTASTIC_MQTT_FORWARDING_POLICY must be inherit or force_off")
 
-    radio_name = _value(environment, "RNS_RADIO_IFAC_NAME")
-    radio_passphrase = _secret(environment, "RNS_RADIO_IFAC_PASSPHRASE")
-    tcp_name = _value(environment, "RNS_TCP_IFAC_NAME")
-    tcp_passphrase = _secret(environment, "RNS_TCP_IFAC_PASSPHRASE")
-    if (radio_name, radio_passphrase) == (tcp_name, tcp_passphrase):
+    radio_name, radio_passphrase, radio_ifac = _ifac_configuration(
+        environment, "RNS_RADIO_IFAC", "radio"
+    )
+    tcp_name, tcp_passphrase, tcp_ifac = _ifac_configuration(
+        environment, "RNS_TCP_IFAC", "TCP"
+    )
+    if radio_name and tcp_name and (radio_name, radio_passphrase) == (
+        tcp_name,
+        tcp_passphrase,
+    ):
         raise ValueError("radio and TCP client IFAC credentials must be different")
 
     auth_required = _yes_no(environment, "LXMD_AUTH_REQUIRED", "no")
@@ -116,10 +145,8 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
         "RNS_GATEWAY_ROLE": gateway_role,
         "RNS_GATEWAY_NODE_LINE": _gateway_node(environment, mesh_mode, gateway_role),
         "RNS_ALLOWED_NODES_LINE": _node_list(environment, mesh_mode, gateway_role),
-        "RNS_RADIO_IFAC_NAME": radio_name,
-        "RNS_RADIO_IFAC_PASSPHRASE": radio_passphrase,
-        "RNS_TCP_IFAC_NAME": tcp_name,
-        "RNS_TCP_IFAC_PASSPHRASE": tcp_passphrase,
+        "RNS_RADIO_IFAC_BLOCK": radio_ifac,
+        "RNS_TCP_IFAC_BLOCK": tcp_ifac,
         "RNS_TCP_LISTEN_PORT": str(
             _integer(environment, "RNS_TCP_LISTEN_PORT", 4242, 1, 65535)
         ),

@@ -20,6 +20,13 @@ public class BridgeConfigTest {
                 "force_off", "constrained_auto");
     }
 
+    private static BridgeConfig autoMultiPeer(String allowedSources) {
+        return new BridgeConfig(
+                "tcp", "192.0.2.1", 4403, "", 7822,
+                1, 3, "auto_multi_peer", "", 200, 2000, "adaptive", allowedSources,
+                "force_off", "constrained_auto");
+    }
+
     @Test public void emptyBroadcastAllowlistAcceptsAnySource() {
         assertTrue(broadcast("").acceptsSource("!aabbcc11"));
     }
@@ -54,6 +61,13 @@ public class BridgeConfigTest {
         assertFalse(config.acceptsSource("!11223344"));
         assertTrue(config.outboundDestination(true).equals("^all"));
         assertTrue(config.outboundDestination(false).equals("!aabbcc11"));
+    }
+
+    @Test public void autoMultiPeerDoesNotRequireGatewayAndUsesOptionalAllowlist() {
+        assertTrue(autoMultiPeer("").acceptsSource("!aabbcc11"));
+        BridgeConfig restricted = autoMultiPeer("!aabbcc11, !11223344");
+        assertTrue(restricted.acceptsSource("!11223344"));
+        assertFalse(restricted.acceptsSource("!55667788"));
     }
 
     @Test public void criticalAckProtectsFinalAndRepairFragmentsOnly() {

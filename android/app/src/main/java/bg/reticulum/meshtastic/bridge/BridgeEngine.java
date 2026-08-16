@@ -19,10 +19,14 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
      * that socket therefore makes Reticulum retry while the originals are
      * still waiting for LoRa. Keep only about one MTU-sized RNS frame queued
      * at the default 2 second pacing and let TCP backpressure reach the
-     * producer early. Repair traffic retains reserved capacity.
+     * producer early. A single explicitly bounded serialized frame may exceed
+     * that horizon for resource tests; it blocks later data while repair
+     * traffic retains reserved capacity.
      */
     private static final int MAX_QUEUED_FRAMES = 8;
     private static final int MAX_QUEUE_HORIZON_MILLIS = 8_000;
+    private static final int MAX_SERIALIZED_DRAIN_MILLIS = 90_000;
+    private static final int MAX_SERIALIZED_RNS_BYTES = 8 * 1024;
     interface StatusListener { void onStatus(String status); }
 
     private final BridgeConfig config;
@@ -33,6 +37,13 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     private final TransmitScheduler transmit;
     private final int maxQueuedFragments;
     private final int maxQueuedBytes;
+    private final int maxDataFragments;
+    private final int maxDataBytes;
+    private final int maxCompleteRnsFrameBytes;
+    private final int maxSerializedFragments;
+    private final int maxSerializedBytes;
+    private final int maxSerializedRnsFrameBytes;
+    private final RnsPeerRouter peerRouter = new RnsPeerRouter();
     private final AtomicLong rnsToMesh = new AtomicLong();
     private final AtomicLong broadcastRnsToMesh = new AtomicLong();
     private final AtomicLong unicastRnsToMesh = new AtomicLong();
@@ -40,6 +51,7 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     private final AtomicLong fragmentsFromMesh = new AtomicLong();
     private final AtomicLong deviceRejects = new AtomicLong();
     private final AtomicLong repairQueueDeferrals = new AtomicLong();
+    private final AtomicLong oversizedRnsFrames = new AtomicLong();
     private final AckTracker acknowledgements = new AckTracker();
     private final AdaptiveAckPolicy adaptiveAck = new AdaptiveAckPolicy();
     private final RnsTrafficTelemetry traffic = new RnsTrafficTelemetry();
@@ -54,6 +66,10 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     private volatile int deviceQueueMinFree = Integer.MAX_VALUE;
     private volatile String lastDeviceReject = "none";
     private volatile String lastRxState = "none";
+    private volatile String lastRouteDecision = "none";
+    private volatile String lastOversizedFrame = "none";
+    private volatile int largestRnsFrameBytes;
+    private volatile int largestRnsFrameFragments;
     private volatile String lastError = "";
     private volatile long localNode;
     private volatile boolean closed;
@@ -69,6 +85,23 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
         this.maxQueuedFragments = fragmentQueueLimit(config.txIntervalMillis);
         this.maxQueuedBytes = maxQueuedFragments * (config.fragmentBody + 2);
         int reservedControlFragments = Math.max(1, Math.min(2, maxQueuedFragments / 4));
+        this.maxDataFragments = Math.min(
+                127, maxQueuedFragments - reservedControlFragments);
+        this.maxDataBytes = maxQueuedBytes
+                - reservedControlFragments * (config.fragmentBody + 2);
+        this.maxCompleteRnsFrameBytes = completeFrameByteLimit(
+                config.fragmentBody, maxDataFragments, maxDataBytes);
+        int durationFragments = config.txIntervalMillis <= 0 ? 127
+                : Math.max(maxDataFragments,
+                        MAX_SERIALIZED_DRAIN_MILLIS / config.txIntervalMillis);
+        int sizeFragments = Math.max(1,
+                (MAX_SERIALIZED_RNS_BYTES + config.fragmentBody - 1) / config.fragmentBody);
+        this.maxSerializedFragments = Math.min(127, Math.min(durationFragments, sizeFragments));
+        this.maxSerializedBytes = maxSerializedFragments * (config.fragmentBody + 2);
+        this.maxSerializedRnsFrameBytes = Math.min(
+                MAX_SERIALIZED_RNS_BYTES,
+                completeFrameByteLimit(
+                        config.fragmentBody, maxSerializedFragments, maxSerializedBytes));
         this.transmit = new TransmitScheduler(
                 config.txIntervalMillis,
                 MAX_QUEUED_FRAMES, maxQueuedFragments, maxQueuedBytes,
@@ -120,7 +153,7 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
             handleRoutingResponse(packet, source);
             return;
         }
-        if (config.mode.equals("auto_single_peer")
+        if ((config.mode.equals("auto_single_peer") || config.mode.equals("auto_multi_peer"))
                 && !acceptsAutoDestination(packet, localNode)) return;
         boolean requireLocalDestination = config.mode.equals("gateway_unicast");
         if (!acceptsInbound(packet, config.channel, localNode, requireLocalDestination)) return;
@@ -134,6 +167,9 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
             FragmentProtocol.Result result = fragments.receive(source, packet.payload, allowControl);
             if (result.controlDeferred) repairQueueDeferrals.incrementAndGet();
             for (byte[] frame : result.frames) {
+                if (config.mode.equals("auto_multi_peer")) {
+                    peerRouter.observeInbound(source, frame);
+                }
                 traffic.recordFrame(false, frame);
                 ReticulumTcpServer.Delivery delivery = reticulum.sendFrame(frame);
                 if (delivery == ReticulumTcpServer.Delivery.REJECTED) {
@@ -177,17 +213,43 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
 
     @Override public void onFrame(byte[] frame) {
         try {
-            String destination = config.outboundDestination(isAnnounceFrame(frame));
+            int estimatedFragments = Math.max(1,
+                    (frame.length + config.fragmentBody - 1) / config.fragmentBody);
+            largestRnsFrameBytes = Math.max(largestRnsFrameBytes, frame.length);
+            largestRnsFrameFragments = Math.max(largestRnsFrameFragments, estimatedFragments);
+            String destination;
+            if (config.mode.equals("auto_multi_peer")) {
+                RnsPeerRouter.Decision decision = peerRouter.destinationFor(frame);
+                destination = decision.destination;
+                lastRouteDecision = decision.reason + " → " + destination;
+            } else if (config.mode.equals("auto_single_peer")
+                    && RnsPacketMetadata.isOpaqueIfac(frame)) {
+                // IFAC masks the Reticulum header. A fixed single-peer mode does
+                // not need to infer it: every opaque frame can safely use the
+                // explicitly configured radio peer, including its announce.
+                destination = config.gateway;
+                lastRouteDecision = "opaque IFAC fixed peer → " + destination;
+            } else {
+                destination = config.outboundDestination(isAnnounceFrame(frame));
+                lastRouteDecision = (destination.equals(RnsPeerRouter.BROADCAST)
+                        ? "configured/discovery broadcast" : "configured peer")
+                        + " → " + destination;
+            }
             List<FragmentProtocol.Transmission> transmissions = fragments.encode(frame, destination);
             // Preserve the exact order emitted by the local RNS instance. Packet
             // type is telemetry only; it is not sufficient to infer dependencies
             // between an announce, data frame and proof at this transparent edge.
-            if (queueTransmissions(
-                    transmissions, true, TransmitScheduler.PRIORITY_NORMAL)) {
+            if (transmit.enqueueSerialized(
+                    transmissions, true, maxSerializedFragments, maxSerializedBytes)) {
                 rnsToMesh.incrementAndGet();
                 if (destination.equals("^all")) broadcastRnsToMesh.incrementAndGet();
                 else unicastRnsToMesh.incrementAndGet();
                 traffic.recordFrame(true, frame);
+            } else if (estimatedFragments > maxSerializedFragments
+                    || encodedBytes(transmissions) > maxSerializedBytes) {
+                oversizedRnsFrames.incrementAndGet();
+                lastOversizedFrame = frame.length + " B/" + estimatedFragments
+                        + " fragments (local admission; nothing reached Meshtastic)";
             }
             publish();
         } catch (InterruptedException interrupted) {
@@ -267,6 +329,7 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
         AckTracker.Snapshot ack = acknowledgements.snapshot();
         long now = SystemClock.elapsedRealtime();
         RnsTrafficTelemetry.Snapshot trafficSnapshot = traffic.snapshot(now);
+        RnsPeerRouter.Snapshot peerSnapshot = peerRouter.snapshot();
         long dropped = queue.dataRejectedFrames + queue.dataFailedFrames;
         String summary =
                 radioState + "\n" + clientState
@@ -275,6 +338,7 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                         + "\nMQTT forwarding: " + config.mqttForwardingPolicy + " → "
                         + (radio.mqttForwardingAllowed() ? "allowed" : "denied")
                         + "\ntraffic scheduling: " + config.trafficProfile
+                        + addressingStatus(peerSnapshot)
                         + "\nTX RNS→mesh: " + rnsToMesh.get() + " frames / "
                         + fragmentsToMesh.get() + " fragments"
                         + "; addressing broadcast/unicast " + broadcastRnsToMesh.get()
@@ -296,6 +360,15 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
                         + queue.normalPriorityFrames + " RNS frames; queue pacing "
                         + queue.adaptivePacingEvents + " events, last +"
                         + queue.currentExtraDelayMillis + " ms"
+                        + "\nRNS frame admission: complete frame ≤"
+                        + maxCompleteRnsFrameBytes + " B/" + maxDataFragments
+                        + " fragments queued normally; serialized bulk ≤"
+                        + maxSerializedRnsFrameBytes + " B/" + maxSerializedFragments
+                        + " fragments (one at a time); active/accepted "
+                        + queue.serializedFrames + "/" + queue.serializedAcceptedFrames
+                        + "; largest seen " + largestRnsFrameBytes + " B/"
+                        + largestRnsFrameFragments + " fragments; oversize rejected: "
+                        + oversizedRnsFrames.get() + ", last: " + lastOversizedFrame
                         + "\nRNS client delivery: " + client.deliveredTotal() + " frames ("
                         + client.deliveredDirect + " direct, " + client.spool.replayedFrames
                         + " replayed); inbound spool: " + client.spool.frames + "/"
@@ -351,6 +424,10 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
 
     private String topologySummary() {
         if (config.mode.equals("broadcast")) return "broadcast from " + localNodeLabel();
+        if (config.mode.equals("auto_multi_peer")) {
+            return localNodeLabel()
+                    + " auto multi-peer (announce/unknown broadcast, learned destinations unicast)";
+        }
         if (config.mode.equals("auto_single_peer")) {
             return localNodeLabel() + " ↔ " + config.gateway
                     + " auto single-peer (announce broadcast, other RNS unicast)";
@@ -365,7 +442,20 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     }
 
     static boolean isAnnounceFrame(byte[] frame) {
-        return frame != null && frame.length > 0 && (frame[0] & 0x03) == 1;
+        RnsPacketMetadata metadata = RnsPacketMetadata.parse(frame);
+        return metadata != null && metadata.packetType == RnsPacketMetadata.ANNOUNCE;
+    }
+
+    private String addressingStatus(RnsPeerRouter.Snapshot peer) {
+        if (!config.mode.equals("auto_multi_peer")) {
+            return "\naddressing decision: " + lastRouteDecision;
+        }
+        return "\npeer routing: " + peer.peers + "/32 peers, " + peer.routes
+                + "/512 routes; learned " + peer.learnedRoutes + ", conflicts "
+                + peer.routeConflicts + ", unknown broadcasts " + peer.unknownBroadcasts
+                + ", opaque IFAC broadcasts " + peer.opaqueIfacBroadcasts
+                + "; last: " + lastRouteDecision
+                + "\npeer table: " + peer.peerSummary;
     }
 
     private int deviceQueuePeakUsed() {
@@ -474,6 +564,23 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     static int fragmentQueueLimit(int intervalMillis) {
         if (intervalMillis <= 0) return 256;
         return Math.max(4, Math.min(256, MAX_QUEUE_HORIZON_MILLIS / intervalMillis));
+    }
+
+    static int completeFrameByteLimit(int fragmentBody, int maxFragments, int maxBytes) {
+        int upper = Math.max(0, maxFragments * fragmentBody);
+        for (int bytes = upper; bytes >= 0; bytes--) {
+            int fragments = Math.max(1, (bytes + fragmentBody - 1) / fragmentBody);
+            if (fragments <= maxFragments && bytes + 2 * fragments <= maxBytes) return bytes;
+        }
+        return 0;
+    }
+
+    private static int encodedBytes(List<FragmentProtocol.Transmission> transmissions) {
+        int total = 0;
+        for (FragmentProtocol.Transmission transmission : transmissions) {
+            total += transmission.payload.length;
+        }
+        return total;
     }
 
     static String routingErrorName(int result) {

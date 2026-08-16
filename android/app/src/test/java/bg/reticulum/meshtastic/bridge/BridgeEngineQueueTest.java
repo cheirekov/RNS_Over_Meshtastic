@@ -37,11 +37,22 @@ public class BridgeEngineQueueTest {
     }
 
     @Test public void classifiesOnlyRnsAnnouncesForAutoBroadcast() {
-        assertFalse(BridgeEngine.isAnnounceFrame(new byte[] {0}));
-        assertTrue(BridgeEngine.isAnnounceFrame(new byte[] {1}));
-        assertFalse(BridgeEngine.isAnnounceFrame(new byte[] {2}));
-        assertFalse(BridgeEngine.isAnnounceFrame(new byte[] {3}));
+        assertFalse(BridgeEngine.isAnnounceFrame(RnsPacketMetadataTest.packet(
+                0, RnsPacketMetadata.SINGLE, RnsPacketMetadata.DATA, 0)));
+        assertTrue(BridgeEngine.isAnnounceFrame(RnsPacketMetadataTest.packet(
+                0, RnsPacketMetadata.SINGLE, RnsPacketMetadata.ANNOUNCE, 0)));
+        assertFalse(BridgeEngine.isAnnounceFrame(RnsPacketMetadataTest.packet(
+                0, RnsPacketMetadata.SINGLE, RnsPacketMetadata.LINK_REQUEST, 0)));
+        byte[] opaqueIfac = RnsPacketMetadataTest.packet(
+                0, RnsPacketMetadata.SINGLE, RnsPacketMetadata.ANNOUNCE, 0);
+        opaqueIfac[0] |= (byte) 0x80;
+        assertFalse(BridgeEngine.isAnnounceFrame(opaqueIfac));
         assertFalse(BridgeEngine.isAnnounceFrame(new byte[0]));
+    }
+
+    @Test public void reportsTheDefaultCompleteFrameAdmissionLimit() {
+        assertEquals(600, BridgeEngine.completeFrameByteLimit(200, 3, 606));
+        assertEquals(400, BridgeEngine.completeFrameByteLimit(200, 2, 404));
     }
 
     @Test public void autoModeAcceptsOnlyBroadcastOrLocallyAddressedPackets() {

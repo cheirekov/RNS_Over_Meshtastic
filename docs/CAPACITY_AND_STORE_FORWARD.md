@@ -13,12 +13,13 @@
 Суров Reticulum frame не носи за bridge-а надеждна семантика „текст“, „файл“
 или „локация“. Записването му на диск и replay след рестарт може да изпрати
 остарял path/link пакет, да заеме ефира и да бъде отхвърлено като duplicate.
-Затова Android 0.1.7 използва bounded RAM queue с отделни лимити за RNS frames,
-Meshtastic fragment-и и байтове. При `tx_interval = 2000` fragment лимитът
-покрива приблизително две минути radio drain; след това loopback TCP четенето
-прилага backpressure вместо тихо изхвърляне. Малък резерв остава достъпен за
-missing-fragment request/retransmit трафика. Linux интерфейсът също има bounded
-RAM priority queue.
+Затова Android използва bounded RAM queue с отделни лимити за RNS frames,
+Meshtastic fragment-и и байтове. При `tx_interval = 2000` normal admission е
+три data fragments/600 RNS bytes, след което loopback TCP четенето прилага
+backpressure вместо да натрупва минути скрита работа. Android 0.2.0 допуска и
+един serialized frame до 8 KiB/около 82 секунди, но не допуска втори такъв
+frame едновременно. Малък резерв остава достъпен за missing-fragment
+request/retransmit трафика. Linux интерфейсът също има bounded RAM queue.
 
 Android bridge-ът следи и PhoneAPI `queue_status`. Ако малката вътрешна TX
 опашка на Meshtastic устройството няма свободен слот, scheduler-ът изчаква нов
@@ -46,6 +47,19 @@ Reticulum трафикът е криптиран и transport слоят е appl
 Първият файлов тест трябва да е малък (например 1–4 KiB), единичен и при празна
 radio queue. След него се измерват действителна продължителност, retransmissions и
 packet loss, преди да се избере quota.
+
+Лимитът на Android 0.2.0 е за единична RNS рамка, не директно за размера на
+прикачения файл. LXMF/Reticulum overhead може да превърне 8 KiB attachment в
+рамка над 8 KiB, която bridge-ът правилно ще отхвърли преди radio TX. Status
+показва normal/serialized лимита, най-голямата видяна рамка и приблизителния
+drain, за да не се бърка local admission с RF загуба.
+
+Първият same-room pure-LoRa тест прие изображения и PTT, включително RNS frame
+7907 B/40 fragments при лимит 8192 B/41. Няма admission/device reject, missing
+fragment или expired assembly и крайният LXMF status е получен. Това приема
+serialized механизма в лабораторни условия, но не доказва същия капацитет през
+1–2 hops или натоварен публичен channel. Queue peak 40 е един serialized frame;
+55–58 backpressure events са очакваното задържане на следващи TCP frames.
 
 ## Повече радиа на Linux сървъра
 

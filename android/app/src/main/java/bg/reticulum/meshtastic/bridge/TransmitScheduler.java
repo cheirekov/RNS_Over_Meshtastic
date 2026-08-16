@@ -52,6 +52,8 @@ final class TransmitScheduler implements AutoCloseable {
         final long announcePacingWaits;
         final long adaptivePacingEvents;
         final long currentExtraDelayMillis;
+        final int serializedFrames;
+        final long serializedAcceptedFrames;
         final String lastRejection;
 
         Snapshot(
@@ -63,6 +65,7 @@ final class TransmitScheduler implements AutoCloseable {
                 long highPriorityFrames, long normalPriorityFrames,
                 long announcePriorityFrames, long announcePacingWaits,
                 long adaptivePacingEvents, long currentExtraDelayMillis,
+                int serializedFrames, long serializedAcceptedFrames,
                 String lastRejection) {
             this.frames = frames;
             this.fragments = fragments;
@@ -85,6 +88,8 @@ final class TransmitScheduler implements AutoCloseable {
             this.announcePacingWaits = announcePacingWaits;
             this.adaptivePacingEvents = adaptivePacingEvents;
             this.currentExtraDelayMillis = currentExtraDelayMillis;
+            this.serializedFrames = serializedFrames;
+            this.serializedAcceptedFrames = serializedAcceptedFrames;
             this.lastRejection = lastRejection;
         }
     }
@@ -93,14 +98,18 @@ final class TransmitScheduler implements AutoCloseable {
         final Deque<FragmentProtocol.Transmission> transmissions;
         final boolean control;
         final int priority;
+        final boolean serialized;
         int localFailures;
         boolean started;
         boolean pacingWaitCounted;
 
-        Batch(List<FragmentProtocol.Transmission> transmissions, boolean control, int priority) {
+        Batch(
+                List<FragmentProtocol.Transmission> transmissions, boolean control,
+                int priority, boolean serialized) {
             this.transmissions = new ArrayDeque<>(transmissions);
             this.control = control;
             this.priority = priority;
+            this.serialized = serialized;
         }
     }
 
@@ -138,6 +147,10 @@ final class TransmitScheduler implements AutoCloseable {
     private int pendingFrames;
     private int pendingFragments;
     private int pendingBytes;
+    private int pendingControlFrames;
+    private int pendingControlFragments;
+    private int pendingControlBytes;
+    private int serializedFrames;
     private int peakFrames;
     private int peakFragments;
     private int peakBytes;
@@ -156,6 +169,7 @@ final class TransmitScheduler implements AutoCloseable {
     private long announcePacingWaits;
     private long adaptivePacingEvents;
     private long currentExtraDelayMillis;
+    private long serializedAcceptedFrames;
     private int consecutiveControlSends;
     private int consecutiveNonAnnounceFrames;
     private long nextAnnounceStartNanos;
@@ -253,6 +267,25 @@ final class TransmitScheduler implements AutoCloseable {
             List<FragmentProtocol.Transmission> transmissions,
             boolean waitForCapacity,
             int priority) throws InterruptedException {
+        return enqueue(transmissions, waitForCapacity, priority, 0, 0);
+    }
+
+    boolean enqueueSerialized(
+            List<FragmentProtocol.Transmission> transmissions,
+            boolean waitForCapacity,
+            int maxSerializedFragments,
+            int maxSerializedBytes) throws InterruptedException {
+        return enqueue(
+                transmissions, waitForCapacity, PRIORITY_NORMAL,
+                maxSerializedFragments, maxSerializedBytes);
+    }
+
+    private boolean enqueue(
+            List<FragmentProtocol.Transmission> transmissions,
+            boolean waitForCapacity,
+            int priority,
+            int maxSerializedFragments,
+            int maxSerializedBytes) throws InterruptedException {
         if (transmissions.isEmpty()) return true;
         if (priority < PRIORITY_HIGH || priority > PRIORITY_ANNOUNCE) {
             throw new IllegalArgumentException("invalid scheduler priority " + priority);
@@ -262,10 +295,13 @@ final class TransmitScheduler implements AutoCloseable {
         if (control) priority = PRIORITY_HIGH;
         int fragments = immutable.size();
         int bytes = immutable.stream().mapToInt(item -> item.payload.length).sum();
+        boolean serialized = !control && !canEverFit(fragments, bytes, false)
+                && maxSerializedFragments > 0 && maxSerializedBytes > 0
+                && fragments <= maxSerializedFragments && bytes <= maxSerializedBytes;
         boolean waited = false;
         Snapshot changed;
         synchronized (lock) {
-            if (!canEverFit(fragments, bytes, control)) {
+            if (!canEverFit(fragments, bytes, control) && !serialized) {
                 countRejected(control);
                 lastRejection = rejectionDescription(
                         control ? "control frame" : "data frame", fragments, bytes,
@@ -276,7 +312,8 @@ final class TransmitScheduler implements AutoCloseable {
                 notifyChanged(changed);
                 return false;
             }
-            while (!closed && !hasCapacity(fragments, bytes, control)) {
+            while (!closed && !(serialized
+                    ? hasSerializedCapacity() : hasCapacity(fragments, bytes, control))) {
                 if (!waitForCapacity) {
                     countRejected(control);
                     lastRejection = rejectionDescription(
@@ -295,8 +332,17 @@ final class TransmitScheduler implements AutoCloseable {
                 lock.wait();
             }
             if (closed) return false;
-            Batch batch = new Batch(immutable, control, priority);
+            Batch batch = new Batch(immutable, control, priority, serialized);
             queueFor(batch).addLast(batch);
+            if (serialized) {
+                serializedFrames++;
+                serializedAcceptedFrames++;
+            }
+            if (control) {
+                pendingControlFrames++;
+                pendingControlFragments += fragments;
+                pendingControlBytes += bytes;
+            }
             if (!control) {
                 if (priority == PRIORITY_HIGH) highPriorityFrames++;
                 else if (priority == PRIORITY_ANNOUNCE) announcePriorityFrames++;
@@ -372,6 +418,12 @@ final class TransmitScheduler implements AutoCloseable {
                             pendingFrames--;
                             pendingFragments -= abandonedFragments;
                             pendingBytes -= abandonedBytes;
+                            if (batch.control) {
+                                pendingControlFrames--;
+                                pendingControlFragments -= abandonedFragments;
+                                pendingControlBytes -= abandonedBytes;
+                            }
+                            if (batch.serialized) serializedFrames--;
                             countFailed(batch.control);
                         }
                         changed = snapshotLocked();
@@ -394,8 +446,14 @@ final class TransmitScheduler implements AutoCloseable {
                     batch.transmissions.removeFirst();
                     pendingFragments--;
                     pendingBytes -= transmission.payload.length;
+                    if (batch.control) {
+                        pendingControlFragments--;
+                        pendingControlBytes -= transmission.payload.length;
+                    }
                     if (batch.transmissions.isEmpty()) {
                         pendingFrames--;
+                        if (batch.control) pendingControlFrames--;
+                        if (batch.serialized) serializedFrames--;
                         if (!batch.control && batch.priority == PRIORITY_ANNOUNCE) {
                             nextAnnounceStartNanos = time.nanoTime() + announceIntervalNanos;
                             consecutiveNonAnnounceFrames = 0;
@@ -459,12 +517,22 @@ final class TransmitScheduler implements AutoCloseable {
     }
 
     private boolean hasCapacity(int fragments, int bytes, boolean control) {
+        if (!control && serializedFrames > 0) return false;
+        if (control && serializedFrames > 0) {
+            return pendingControlFrames + 1 <= reservedControlFrames
+                    && pendingControlFragments + fragments <= reservedControlFragments
+                    && pendingControlBytes + bytes <= reservedControlBytes;
+        }
         int frameLimit = control ? maxFrames : maxFrames - reservedControlFrames;
         int fragmentLimit = control ? maxFragments : maxFragments - reservedControlFragments;
         int byteLimit = control ? maxBytes : maxBytes - reservedControlBytes;
         return pendingFrames + 1 <= frameLimit
                 && pendingFragments + fragments <= fragmentLimit
                 && pendingBytes + bytes <= byteLimit;
+    }
+
+    private boolean hasSerializedCapacity() {
+        return serializedFrames == 0 && pendingFrames == pendingControlFrames;
     }
 
     private boolean canEverFit(int fragments, int bytes, boolean control) {
@@ -485,6 +553,7 @@ final class TransmitScheduler implements AutoCloseable {
                 dataRejectedFrames, controlRejectedFrames, dataFailedFrames, controlFailedFrames,
                 highPriorityFrames, normalPriorityFrames, announcePriorityFrames,
                 announcePacingWaits, adaptivePacingEvents, currentExtraDelayMillis,
+                serializedFrames, serializedAcceptedFrames,
                 lastRejection);
     }
 
@@ -526,6 +595,10 @@ final class TransmitScheduler implements AutoCloseable {
             pendingFrames = 0;
             pendingFragments = 0;
             pendingBytes = 0;
+            pendingControlFrames = 0;
+            pendingControlFragments = 0;
+            pendingControlBytes = 0;
+            serializedFrames = 0;
             changed = snapshotLocked();
             lock.notifyAll();
         }

@@ -21,6 +21,9 @@ public class RnsTrafficTelemetryTest {
         headerTwo[0] = 0x43;
         headerTwo[34] = 0x05;
         assertEquals("proof/resource-proof (35 B)", RnsTrafficTelemetry.describe(headerTwo));
+        byte[] opaqueIfac = frame(1, 0, 64);
+        opaqueIfac[0] |= (byte) 0x80;
+        assertEquals("opaque-ifac (64 B)", RnsTrafficTelemetry.describe(opaqueIfac));
         assertEquals("malformed (1 B)", RnsTrafficTelemetry.describe(new byte[1]));
     }
 

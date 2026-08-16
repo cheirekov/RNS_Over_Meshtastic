@@ -43,8 +43,9 @@ high-speed Reticulum Backbone/TCP interface and can submit RNS resource frames
 far larger than the bridge's deliberately short LoRa queue horizon. Such a
 frame is rejected locally instead of being silently buffered for minutes; the
 0.1.12 `admission` line makes that condition explicit. File/resource transfer
-over the direct Android tunnel remains experimental until the Reticulum-facing
-MTU/bitrate mismatch is resolved.
+over the direct Android tunnel remains experimental. Version 0.2.0 below adds
+a bounded one-frame serialized path, but does not resolve the Reticulum-facing
+MTU/bitrate mismatch.
 
 Version 0.1.13 separates MQTT origin from the final radio delivery mechanism,
 so a packet forwarded by MQTT and finally received over LoRa is shown as
@@ -120,6 +121,44 @@ disconnected state is not counted as a disconnect. This distinguishes a real
 empty run from diagnostics copied after `Save & start`, service recreation or
 a transport reconnect. Radio framing, addressing, pacing and ACK behaviour are
 unchanged from 0.1.21.
+
+Version 0.2.0 adds bounded multi-peer learning and serialized resource
+admission. In `auto_multi_peer`, RNS announces, group/plain packets and unknown
+destinations remain channel broadcast. From valid inbound frames the bridge
+learns destination hashes, reverse packet-proof hashes and link IDs and sends
+later known traffic by Meshtastic unicast. The volatile table is bounded to 32
+radio peers and 512 routes, expires idle entries after 24 hours and can be
+restricted with the optional Node-ID allowlist. It does not inspect LXMF
+content. In multi-peer mode, IFAC-masked RNS headers cannot be routed safely,
+so they are reported as `opaque-ifac` and use broadcast fallback. Explicit
+`auto_single_peer` remains unicast because its only peer is already known.
+
+The normal default queue remains three data fragments/600 RNS bytes. One larger
+frame can now be serialized without admitting a second large frame, while a
+control fragment stays reserved for repair. At body 200 and interval 2000 ms,
+the reported upper bound is 8 KiB/41 fragments (roughly 82 seconds before
+adaptive delay and return traffic). The limit is on each RNS frame, not directly
+on the attachment size. A larger frame is rejected locally and diagnostics say
+explicitly that nothing reached Meshtastic.
+
+The first 0.2.0 same-room pure-LoRa acceptance on 2026-08-16 passed with two
+Android bridges in `auto_multi_peer`: both learned the other radio with zero
+route conflicts or unknown-destination fallbacks, and 167 of 232 cumulative TX
+RNS frames used learned PKI unicast after discovery. Images and PTT completed
+with end-to-end confirmations. The largest observed outbound frames were
+3,747 B/19 fragments and 7,907 B/40 fragments; serialized admission accepted
+all five large frames across both directions, with zero oversize/data/control
+rejection, incomplete assembly, expiry, device rejection or local send
+failure. Queue peaks of 19 and 40 fragments are the intentionally serialized
+single frame, not overflow of the normal four-fragment window. Backpressure
+55/58 is likewise expected: it proves that later local TCP work was held behind
+the radio serializer.
+
+The Pixel radio reconnected twice (`radio up/down 3/2`) and both local RNS
+clients reconnected during the run. No completed frame was lost; the bounded
+inbound spool replayed nine frames on the Honor side and one on the Pixel side.
+Reconnect frequency remains an explicit screen-off and multi-hop field-test
+observation, not a closed reliability result.
 
 ## Reproducible build
 

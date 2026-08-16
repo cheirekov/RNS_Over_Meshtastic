@@ -565,6 +565,79 @@ Acceptance:
 peer-ове. При regression върнете двата bridge-а директно на доказания
 `broadcast` setup; не променяйте едновременно pacing, ACK или MQTT policy.
 
+### Фаза H — 0.2.0 auto multi-peer
+
+Първият тест е без IFAC и по възможност с три radio устройства в една стая.
+На всички bridge-ове задайте `auto_multi_peer`, еднакъв Meshtastic channel,
+body `200`, interval `2000`, hop `0`, `constrained_auto`, ACK `off` и
+`force_off`. Полето за unicast peer е неактивно. За discovery baseline оставете
+allowlist празен; след успешния тест повторете с Node ID-тата на другите два
+radio peer-а във всеки bridge.
+
+1. Стартирайте A, B и C и направете по един RNS announce последователно, с пауза
+   до появата му на другите клиенти.
+2. Изпратете по един кратък текст A→B, B→C и C→A, като изчакате proof преди
+   следващия.
+3. Направете crossing burst само след успешните единични съобщения.
+4. Копирайте diagnostics от трите bridge-а преди restart.
+
+Acceptance: `peer table` показва останалите radio Node ID-та; `peer routing`
+има learned routes; announce броят увеличава broadcast, а data/proof след
+learning увеличават unicast; няма conflict, admission reject, incomplete
+assembly или expired frame. Първият packet към още непознат destination може
+да е `unknown broadcast` — това е discovery fallback, не retry след ACK timeout.
+
+Повторение с IFAC е отделен compatibility тест. Очаквайте `opaque-ifac
+broadcasts` да расте и трафикът да остане broadcast; не очаквайте learned
+unicast routing от скрит RNS header.
+
+### Фаза I — 0.2.0 serialized small-resource test
+
+Използвайте два radio peer-а в една стая, `auto_single_peer`, pure LoRa
+`force_off`, hop `0`, body `200`, interval `2000`, ACK `off` и без паралелен
+message burst. След успешен кратък текст изпратете последователно приблизително
+1 KiB, 4 KiB и 8 KiB resource, като винаги чакате `radio queue` да стане 0 и
+крайния LXMF status преди следващия.
+
+Diagnostics показва normal и `serialized bulk` limits, active/accepted count,
+largest RNS frame и приблизителния drain. Лимитът е за единичен RNS frame, не
+за файла; клиентски overhead може да направи 8 KiB attachment по-голям от 8
+KiB frame. При `oversize rejected` кадърът е спрян локално и не трябва да има
+нови Meshtastic TX fragments. При serialized acceptance очаквайте около 2 s на
+fragment (8 KiB ≈ 41 fragments ≈ 82 s), плюс proof/repair и adaptive pacing.
+Следете ChUtil и прекратете теста при регулаторен/device reject; bridge-ът не
+включва duty-cycle override.
+
+### Записан laboratory acceptance — 2026-08-16
+
+Фази H и I са приети за два bridge-а в една стая, pure LoRa, channel 1,
+`force_off`, `constrained_auto`, ACK `off` и без IFAC. `auto_multi_peer`
+научи другия radio и в двете посоки: 96/158 active routes, нула conflicts,
+нула unknown fallback и 92/75 learned-unicast TX frames след discovery.
+
+Кратки съобщения, изображения и PTT са получени с end-to-end confirmations.
+Най-големите outbound RNS frames са 3747 B/19 fragments и 7907 B/40 fragments;
+serialized admission е приел 2 и 3 large frames. И на двата края има:
+
+- `oversize rejected: 0` и data/control admission `0/0`;
+- `missing 0`, `expired 0`, `capped 0` и `duplicates 0`;
+- firmware reject `0`, local retry `0` и dropped `0`;
+- празна reassembly и radio queue в края.
+
+`peak 19/40 fragments` включва целия единствен serialized frame и може
+умишлено да е по-голям от normal denominator `/4`. `backpressure 58/55` е
+успешно ограничаване на local TCP producer-а, не packet loss. Honor е replay-нал
+9 frames, а Pixel 1 след кратки local-client прекъсвания, без spool rejection.
+Pixel BLE transport е реконектнал два пъти (`radio up/down 3/2`); следващият
+field report трябва да отбележи дали reconnect има при screen-off и дали
+съвпада с delivery delay, repair или drop.
+
+Следващият приемателен тест е градският маршрут: един TCP bridge близо до
+`gorna2`, другият BLE bridge в движение, първо кратки текстове, после само един
+малък resource. Записват се hop count, LoRa/MQTT path label, RSSI/SNR, reconnect
+events, queue drain, ChUtil, repairs и proofs. Не смесвайте едновременно голям
+resource, PTT и burst — така евентуалната грешка остава локализируема.
+
 ## След успешния първи тест
 
 Преди по-дълго използване:

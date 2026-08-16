@@ -22,6 +22,7 @@ final class RnsTrafficTelemetry {
     private static final class FrameCounters {
         final long[] types = new long[4];
         long malformed;
+        long opaqueIfac;
         long bytes;
         String last = "none";
     }
@@ -47,7 +48,9 @@ final class RnsTrafficTelemetry {
         FrameCounters counters = outbound ? txFrames : rxFrames;
         counters.bytes += frame == null ? 0 : frame.length;
         String description = describe(frame);
-        if (description.startsWith("malformed")) {
+        if (description.startsWith("opaque-ifac")) {
+            counters.opaqueIfac++;
+        } else if (description.startsWith("malformed")) {
             counters.malformed++;
         } else {
             counters.types[packetType(frame)]++;
@@ -85,6 +88,7 @@ final class RnsTrafficTelemetry {
                 + ", announce " + counters.types[1]
                 + ", link " + counters.types[2]
                 + ", proof " + counters.types[3]
+                + ", opaque-ifac " + counters.opaqueIfac
                 + ", malformed " + counters.malformed
                 + ", " + counters.bytes + " B, last " + counters.last;
     }
@@ -107,6 +111,7 @@ final class RnsTrafficTelemetry {
 
     static String describe(byte[] frame) {
         if (frame == null || frame.length < 2) return "malformed (" + (frame == null ? 0 : frame.length) + " B)";
+        if (RnsPacketMetadata.isOpaqueIfac(frame)) return "opaque-ifac (" + frame.length + " B)";
         int type = packetType(frame);
         int headerType = (frame[0] & 0x40) >>> 6;
         int contextIndex = headerType == 0

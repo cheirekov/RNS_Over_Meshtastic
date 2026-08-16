@@ -17,6 +17,8 @@ MQTT configuration. Configure radios with an official Meshtastic client first.
 | Functional MVP | Complete | Linux and Android bridges exchange Reticulum traffic over real Meshtastic radios. |
 | LoRa and MQTT validation | Complete for the documented scenarios | Pure LoRa, LoRa–MQTT–LoRa and MQTT virtual-node paths have been exercised. |
 | Direct phone-to-phone mode | Complete | Two Android bridges and two radios can communicate without a Linux gateway. |
+| Android auto multi-peer | Two-peer laboratory acceptance complete | Learned routing, PKI unicast, images and PTT passed without admission, reassembly or delivery loss; three-peer and multi-hop field validation remain. |
+| Serialized small resources | Laboratory acceptance complete | RNS frames of 3,747 B/19 fragments and 7,907 B/40 fragments crossed pure LoRa with proofs and no missing fragments. |
 | Queue, power and background hardening | Active | Bounded queues, pacing and Android foreground operation are implemented; longer field tests continue. |
 | Linux LXMF propagation service | Implemented, field acceptance pending | Reproducible non-root `rnsd` + `lxmd` containers, persistent state and conservative quotas are available. |
 | Production readiness | Not claimed | Capacity limits, delivery behaviour and failure recovery still need wider measurement and soak testing. |
@@ -47,7 +49,7 @@ The Linux/NixOS implementation provides:
 - an optional Docker service profile with separate `rnsd` and `lxmd` processes,
   persistent identities/message storage and no host-side Python installation.
 
-Android bridge 0.1.22 provides:
+Android bridge 0.2.0 provides:
 
 - a direct BLE or TCP PhoneAPI connection without depending on the official
   Meshtastic Android app;
@@ -58,6 +60,14 @@ Android bridge 0.1.22 provides:
 - an `auto_single_peer` mode that broadcasts only RNS announces and sends all
   later data/link/proof frames by Meshtastic unicast to one configured peer,
   while preserving the original RNS FIFO order;
+- an experimental bounded `auto_multi_peer` mode: announce, group and unknown
+  destinations use channel broadcast; the bridge learns volatile mappings from
+  RNS destination, packet-proof and link hashes to Meshtastic Node IDs and uses
+  PKI unicast for known peers. The table is limited to 32 peers/512 routes with
+  a 24-hour idle expiry and an optional Meshtastic Node-ID allowlist;
+- IFAC-safe addressing: opaque frames stay unicast in explicit
+  `auto_single_peer`, while `auto_multi_peer` uses broadcast because the hidden
+  destination hash cannot safely select one of several radio peers;
 - global LoRa fragment pacing, bounded frame/fragment/byte queues, TCP
   backpressure, retransmission reserve and Meshtastic `queue_status` flow
   control;
@@ -79,9 +89,10 @@ Android bridge 0.1.22 provides:
 - persistent PhoneAPI rejection telemetry, including explicit
   `DUTY_CYCLE_LIMIT (9)` and `RATE_LIMIT_EXCEEDED (38)` results; regulatory
   duty-cycle override is never enabled by the bridge;
-- explicit admission diagnostics for RNS frames that exceed the bounded LoRa
-  queue, plus active/incomplete fragment assembly, repair, retransmit, expiry
-  and duplicate counters;
+- explicit admission diagnostics plus a bounded serialized-bulk path for one
+  larger RNS frame at a time. At the default 200-byte/2000-ms settings, normal
+  admission is 600 bytes and serialized admission is at most 8 KiB (about 82
+  seconds of fragment pacing), while repair control retains reserved capacity;
 - path diagnostics that distinguish direct MQTT reception from an
   MQTT-origin packet whose final delivery mechanism was LoRa (`MQTT→LoRa`);
 - an `inherit / force_off` MQTT forwarding policy for bridge packets. It can
@@ -121,9 +132,11 @@ instead of acknowledging minutes of work into a slow LoRa scheduler. Existing
 Sideband/Columba TCP configuration has no standard bitrate negotiation field;
 the remaining timeout mismatch is tracked as an upstream-integration issue.
 Recent Sideband versions create a high-speed Backbone client whose automatic
-hardware MTU can be many kilobytes. Multi-kilobyte resource frames do not fit
-the deliberately short LoRa queue and are rejected locally; 0.1.12 makes the
-frame size and admission limit visible instead of conflating this with RF loss.
+hardware MTU can be many kilobytes. Android 0.2.0 can serialize one bounded
+frame beyond the short normal queue, but this does not change Reticulum's TCP
+bitrate/timeout estimate and does not make LoRa a bulk medium. Frames beyond the
+reported serialized limit are rejected locally before any Meshtastic fragment
+is sent.
 
 ## Demonstrated end-to-end scenarios
 
@@ -137,15 +150,20 @@ The following have been exercised on real hardware and clients:
   without an intermediate Linux server;
 - two Android phones in fixed reciprocal Meshtastic unicast mode without an
   intermediate Linux server;
+- two Android 0.2.0 bridges in `auto_multi_peer` mode, learning 96/158 volatile
+  RNS routes and moving most post-discovery traffic by direct Meshtastic PKI
+  unicast with zero route conflicts;
 - operation with and without Reticulum IFAC;
-- a small image transfer as a controlled low-bandwidth test, while repeatable
-  multi-kilobyte resource/file delivery remains unresolved and is not claimed;
+- bidirectional images up to a measured 7,907-byte/40-fragment RNS frame and
+  PTT in a same-room pure-LoRa test, with end-to-end confirmations and no
+  admission rejection, incomplete assembly or expired frame. General file and
+  real-field media delivery remain experimental and are not claimed;
 - Android foreground operation on Pixel Android and Honor MagicOS after the
   required OEM battery permissions were granted;
 - MQTT downlink with a non-zero hop limit on a broker whose deployment permits
   it, including a returned Meshtastic routing ACK.
 
-Automated validation currently contains 43 Python tests and 62 Android unit
+Automated validation currently contains 49 Python tests and 73 Android unit
 tests, in addition to Android lint and containerised APK builds. Exact,
 repeatable procedures and the distinction between native Meshtastic DM and the
 decoded MQTT virtual-node path are in [docs/TESTING.md](docs/TESTING.md).
@@ -163,16 +181,20 @@ Work after the MVP is deliberately measurement-driven:
 3. Field-validate the new radio ACK/NAK telemetry against Reticulum/LXMF proofs
    and tune the constrained return path without treating an ACK timeout as
    proof that the payload was not delivered.
-4. Field-validate the bounded `auto_single_peer` profile: channel broadcast for
-   announces and Meshtastic PKI unicast for all other RNS frames to one
-   explicitly configured peer. Multi-peer learning remains a later design.
-5. Field-validate the implemented LXMF propagation node with one bounded
+4. Field-validate `auto_multi_peer` with three or more Android radios, including
+   route learning/expiry, unknown-destination broadcast, allowlists and the
+   documented IFAC broadcast fallback.
+5. Field-characterise the accepted serialized-bulk path over one and two LoRa
+   hops: drain time, proof return, channel utilisation, reconnect behaviour and
+   the 8 KiB oversize boundary. Treat PTT as bounded store-and-forward audio,
+   not live voice capacity.
+6. Field-validate the implemented LXMF propagation node with one bounded
    offline short-text offer/retrieval cycle. Persistent replay of arbitrary raw
    Reticulum frames is intentionally not the design.
-6. Evaluate multiple Linux radios first as active/passive failover or receive
+7. Evaluate multiple Linux radios first as active/passive failover or receive
    diversity. Same-channel bandwidth aggregation is not assumed to be safe or
    useful.
-7. Polish release packaging, upgrade paths, diagnostics and field-test
+8. Polish release packaging, upgrade paths, diagnostics and field-test
    reporting before declaring a stable release.
 
 See [docs/CAPACITY_AND_STORE_FORWARD.md](docs/CAPACITY_AND_STORE_FORWARD.md)

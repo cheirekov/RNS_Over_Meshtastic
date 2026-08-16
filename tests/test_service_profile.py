@@ -51,6 +51,52 @@ def test_rejects_reused_ifac_credentials() -> None:
         configuration_values(values)
 
 
+def test_ifacs_can_both_be_disabled(tmp_path: Path) -> None:
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    values = environment() | {
+        "RNS_RADIO_IFAC_NAME": "",
+        "RNS_RADIO_IFAC_PASSPHRASE": "",
+        "RNS_TCP_IFAC_NAME": "",
+        "RNS_TCP_IFAC_PASSPHRASE": "",
+    }
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    assert "ifac_size" not in config
+    assert "network_name" not in config
+    assert "passphrase" not in config
+    assert "IFAC disabled for the radio interface" in config
+    assert "IFAC disabled for the TCP interface" in config
+
+
+def test_radio_and_tcp_ifacs_are_independently_optional(tmp_path: Path) -> None:
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    values = environment() | {
+        "RNS_RADIO_IFAC_NAME": "",
+        "RNS_RADIO_IFAC_PASSPHRASE": "",
+    }
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    assert "IFAC disabled for the radio interface" in config
+    assert "network_name = vpn-private" in config
+
+
+@pytest.mark.parametrize(
+    ("missing", "present"),
+    [
+        ("RNS_RADIO_IFAC_NAME", "RNS_RADIO_IFAC_PASSPHRASE"),
+        ("RNS_RADIO_IFAC_PASSPHRASE", "RNS_RADIO_IFAC_NAME"),
+        ("RNS_TCP_IFAC_NAME", "RNS_TCP_IFAC_PASSPHRASE"),
+        ("RNS_TCP_IFAC_PASSPHRASE", "RNS_TCP_IFAC_NAME"),
+    ],
+)
+def test_rejects_partial_ifac_pair(missing: str, present: str) -> None:
+    values = environment()
+    values[missing] = ""
+    assert values[present]
+    with pytest.raises(ValueError, match="must both be set or both be empty"):
+        configuration_values(values)
+
+
 def test_authenticated_lxmd_writes_valid_allowlist(tmp_path: Path) -> None:
     templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
     values = environment() | {

@@ -94,6 +94,42 @@ public class TransmitSchedulerTest {
         }
     }
 
+    @Test public void serializesOneBoundedBulkFrameAndKeepsRepairCapacity() throws Exception {
+        FakeTime time = new FakeTime();
+        List<Integer> sent = new ArrayList<>();
+        CountDownLatch firstStarted = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch completed = new CountDownLatch(5);
+        TransmitScheduler scheduler = new TransmitScheduler(
+                0, 8, 4, 808, 2, 1, 202,
+                transmission -> {
+                    synchronized (sent) { sent.add((int) transmission.payload[0]); }
+                    if (transmission.payload[0] == 1) {
+                        firstStarted.countDown();
+                        releaseFirst.await();
+                    }
+                    completed.countDown();
+                }, listener(), time);
+        try {
+            List<FragmentProtocol.Transmission> bulk = List.of(
+                    transmission(1, 202), transmission(2, 202),
+                    transmission(3, 202), transmission(4, 202));
+            assertTrue(scheduler.enqueueSerialized(bulk, true, 8, 1616));
+            assertTrue(firstStarted.await(1, TimeUnit.SECONDS));
+            assertEquals(1, scheduler.snapshot().serializedFrames);
+            assertTrue(scheduler.enqueue(one("request", 9), false));
+            releaseFirst.countDown();
+            assertTrue(completed.await(1, TimeUnit.SECONDS));
+            assertEquals(List.of(1, 9, 2, 3, 4), sent);
+            assertEquals(0, scheduler.snapshot().serializedFrames);
+            assertEquals(1, scheduler.snapshot().serializedAcceptedFrames);
+            assertEquals(0, scheduler.snapshot().rejectedFrames);
+        } finally {
+            releaseFirst.countDown();
+            scheduler.close();
+        }
+    }
+
     @Test public void retriesTransientLocalSendFailureWithoutDroppingRemainingFragments() throws Exception {
         FakeTime time = new FakeTime();
         List<Integer> sent = new ArrayList<>();

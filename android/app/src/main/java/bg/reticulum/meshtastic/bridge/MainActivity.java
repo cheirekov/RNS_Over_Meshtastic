@@ -116,12 +116,13 @@ public final class MainActivity extends Activity {
         add(form, "MQTT forwarding permission for bridge packets", mqttForwardingPolicy);
         trafficProfile = spinner(new String[] {"constrained_auto", "transparent"});
         add(form, "LoRa traffic scheduling profile", trafficProfile);
-        mode = spinner(new String[] {"auto_single_peer", "gateway_unicast", "broadcast"});
+        mode = spinner(new String[] {
+                "auto_single_peer", "auto_multi_peer", "gateway_unicast", "broadcast"});
         add(form, "Radio addressing mode", mode);
         gateway = text("!8fd13c64", false);
         add(form, "Unicast peer / gateway Meshtastic Node ID", gateway);
         allowedSources = text("!aabbcc11, !11223344", false);
-        add(form, "Allowed peer Node IDs (optional, broadcast only)", allowedSources);
+        add(form, "Allowed peer Node IDs (optional, broadcast / auto multi-peer)", allowedSources);
         fragmentBody = text("200", true);
         add(form, "Fragment payload bytes", fragmentBody);
         txInterval = text("2000", true);
@@ -361,10 +362,12 @@ public final class MainActivity extends Activity {
     private void updateModeFields() {
         if (mode == null || gateway == null || allowedSources == null || ackPolicy == null) return;
         boolean broadcast = selected(mode).equals("broadcast");
-        gateway.setEnabled(!broadcast);
-        gateway.setAlpha(broadcast ? 0.45f : 1.0f);
-        allowedSources.setEnabled(broadcast);
-        allowedSources.setAlpha(broadcast ? 1.0f : 0.45f);
+        boolean multiPeer = selected(mode).equals("auto_multi_peer");
+        boolean needsGateway = !broadcast && !multiPeer;
+        gateway.setEnabled(needsGateway);
+        gateway.setAlpha(needsGateway ? 1.0f : 0.45f);
+        allowedSources.setEnabled(broadcast || multiPeer);
+        allowedSources.setAlpha(broadcast || multiPeer ? 1.0f : 0.45f);
         ackPolicy.setEnabled(!broadcast);
         ackPolicy.setAlpha(broadcast ? 0.45f : 1.0f);
     }
