@@ -8,5 +8,6 @@ build/
 dist/
 var/
 .devbox/
+android/.gradle/
 .env.linux-service
 examples/*/storage/
