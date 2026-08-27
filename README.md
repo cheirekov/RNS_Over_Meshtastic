@@ -21,6 +21,8 @@ MQTT configuration. Configure radios with an official Meshtastic client first.
 | Serialized small resources | Laboratory acceptance complete | RNS frames of 3,747 B/19 fragments and 7,907 B/40 fragments crossed pure LoRa with proofs and no missing fragments. |
 | Queue, power and background hardening | Active | Bounded queues, pacing and Android foreground operation are implemented; longer field tests continue. |
 | Linux LXMF propagation service | Implemented, field acceptance pending | Reproducible non-root `rnsd` + `lxmd` containers, persistent state and conservative quotas are available. |
+| Public-network boundary | Architecture fixed, implementation pending | Private radio/LAN interfaces use `internal`; an explicitly permitted outbound public uplink uses `boundary` with private announce export disabled. |
+| iOS bridge | Feasibility and delivery plan complete | The supported direction is an in-process interface inside an iOS Reticulum/LXMF client, not a standalone cross-app background bridge. |
 | Production readiness | Not claimed | Capacity limits, delivery behaviour and failure recovery still need wider measurement and soak testing. |
 
 ## Architecture and implemented capabilities
@@ -178,7 +180,7 @@ The following have been exercised on real hardware and clients:
 - MQTT downlink with a non-zero hop limit on a broker whose deployment permits
   it, including a returned Meshtastic routing ACK.
 
-Automated validation currently contains 60 Python tests and 74 Android unit
+Automated validation currently contains 60 Python tests and 75 Android unit
 tests, in addition to Android lint and containerised APK builds. Exact,
 repeatable procedures and the distinction between native Meshtastic DM and the
 decoded MQTT virtual-node path are in [docs/TESTING.md](docs/TESTING.md).
@@ -199,10 +201,10 @@ Work after the MVP is deliberately measurement-driven:
 4. Field-validate `auto_multi_peer` with three or more Android radios, including
    route learning/expiry, unknown-destination broadcast, allowlists and the
    documented IFAC broadcast fallback.
-5. Accept the Linux `auto_multi_peer` hub against one Android/BLE bridge and one
-   TCP client, then repeat with several Android radio peers and an explicit
-   allowlist. Initial peer discovery must be broadcast; learned return paths
-   must appear as per-radio child interfaces and Meshtastic unicast.
+5. Repeat the accepted Linux `auto_multi_peer` hub path with several Android
+   radio peers and an explicit allowlist. Initial peer discovery must be
+   broadcast; learned return paths must appear as per-radio child interfaces
+   and Meshtastic unicast. Keep TCP/PhoneAPI reconnect in the soak test.
 6. Field-characterise the accepted serialized-bulk path over one and two LoRa
    hops: drain time, proof return, channel utilisation, reconnect behaviour and
    the 8 KiB oversize boundary. Treat PTT as bounded store-and-forward audio,
@@ -213,7 +215,13 @@ Work after the MVP is deliberately measurement-driven:
 8. Evaluate multiple Linux radios first as active/passive failover or receive
    diversity. Same-channel bandwidth aggregation is not assumed to be safe or
    useful.
-9. Polish release packaging, upgrade paths, diagnostics and field-test
+9. Add a controlled public-network profile only after the documented
+   `internal`/`boundary` acceptance proves that public announces do not consume
+   LoRa airtime. Do not expose the private TCP listener publicly.
+10. Begin the iOS adapter with shared binary fixtures and a foreground TCP
+   proof against an existing iOS Reticulum/LXMF client; BLE/background work
+   follows only after that proof.
+11. Polish release packaging, upgrade paths, diagnostics and field-test
    reporting before declaring a stable release.
 
 See [docs/CAPACITY_AND_STORE_FORWARD.md](docs/CAPACITY_AND_STORE_FORWARD.md)
@@ -224,6 +232,10 @@ power model and soak-test checklist.
 The optional reproducible `rnsd` + `lxmd` Linux service profile, its conservative
 LoRa quotas, security boundary, backup procedure and offline-message acceptance
 test are documented in [docs/LINUX_SERVICE.md](docs/LINUX_SERVICE.md).
+
+The selected public-network boundary, strict-isolation alternative and iOS
+integration effort are documented in
+[docs/PUBLIC_BOUNDARY_AND_IOS.md](docs/PUBLIC_BOUNDARY_AND_IOS.md).
 
 The agreed milestone order and the boundary between bridge, Reticulum and LXMF
 responsibilities are fixed in [docs/ROADMAP.md](docs/ROADMAP.md).

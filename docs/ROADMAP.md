@@ -553,6 +553,15 @@ PhoneAPI queue status използва firmware ERRNO namespace, където 35
 `ERRNO_SHOULD_RELEASE`. 0.2.2 разделя двата namespace-а, не брои 35 като reject
 и оставя истинските routing errors в отделната ACK/NAK телеметрия.
 
+Android 0.2.2 и Linux `auto_multi_peer` след това преминаха едно-peer
+Android→Linux полевия сценарий: кратки съобщения и `lxmd` работят, а пълното
+PhoneAPI session replacement възстановява връзката след прекъсване към remote
+Meshtastic radio. Кратък 1.69 KiB PTT resource е доставен с resource proof;
+bridge report-ът завършва без device reject, missing/expired assembly или
+admission failure. Наблюдаваните repair retransmits и `MAX_RETRANSMIT` NAK
+остават важни multi-hop capacity метрики, а не основание да се увеличава
+безконтролно retry трафикът.
+
 ## Приоритет 3 — optional Linux service profile
 
 Linux остава незадължителен за директна Android връзка, но може да комбинира
@@ -591,8 +600,9 @@ voice notes, autopeering и публично излагане не участв�
 
 Linux `auto_multi_peer` вече приема Android broadcast discovery, създава
 отделен Reticulum child interface за всеки radio Node ID и връща learned traffic
-като Meshtastic unicast. Следва acceptance с един Android/BLE bridge и един
-Linux TCP client, после с поне три radio peers и активен allowlist.
+като Meshtastic unicast. Едно-peer Android→Linux acceptance и automatic
+PhoneAPI reconnect вече са завършени. Следващата Linux radio проверка е
+няколко Android peers с allowlist, не повторение на fixed-unicast сценария.
 
 Локалната container acceptance е завършена: build-ът от заключения `uv.lock`
 стартира `rnsd` 1.4.2 и `lxmd` 1.1.1 като UID 10001 върху read-only rootfs,
@@ -610,12 +620,65 @@ radio `!8fd1336c`, TCP server, shared instance и `lxmd`. Radio и TCP IFAC мо
 да се включват независимо; празни трябва да бъдат и двете полета на съответната
 двойка, за да няма двусмислена половин конфигурация.
 
+### Решение за връзка към публична Reticulum мрежа
+
+Професионалният default е един домашен `rnsd`, а не два последователно свързани
+Transport instance-а:
+
+- Meshtastic radio и довереният LAN/VPN listener стават `internal`;
+- разрешен outbound public upstream става `boundary`;
+- public interface задава `announces_from_internal = no`;
+- `lxmd` остава отделен process върху shared local instance.
+
+Така public announces не се разпространяват автоматично към internal LoRa, а
+internal announce-ите не излизат автоматично към публичния uplink. Internal
+клиент все пак може при нужда да направи recursive path request през boundary
+и да използва конкретен публичен destination. Това е demand-driven достъп, не
+public announce flood.
+
+Mode и IFAC не са firewall. При изискване външната страна изобщо да не може да
+научи/достигне private destinations се използват два несвързани `rnsd`
+instance-а. Обикновена TCP/Backbone връзка между тях би премахнала твърдата
+изолация; бъдещ policy relay трябва да работи на LXMF ниво с identity/size/rate/
+expiry allowlist. Пълната схема и acceptance gates са в
+`docs/PUBLIC_BOUNDARY_AND_IOS.md`. Managed public-upstream renderer още не е
+реализиран и не се добавя реален server без разрешение от оператора му.
+
+## Приоритет 4 — iOS interface, не отделен background bridge
+
+iOS вариантът е осъществим, но production архитектурата е Meshtastic port-76
+interface вътре в един iOS Reticulum/LXMF client. Отделен bridge app и отделен
+client app могат да обменят loopback TCP само докато lifecycle-ът им го
+позволява; BLE wake-up на bridge-а не гарантира, че другото приложение работи.
+
+Не започваме от нулата. Meshtastic Apple има Swift CoreBluetooth PhoneAPI,
+protobuf, TCP и state-restoration reference; Reticulum Mobile App има споделен
+RNS/LXMF stack и iOS BLE/TCP/attachment/voice инфраструктура; Retichat iOS има
+Rust RNS/LXMF и native callback interface за BLE radio. Предпочитаният първи
+spike е към Reticulum Mobile App, следван от Retichat adapter оценка.
+
+Последователността е:
+
+1. platform-neutral binary fixtures за PhoneAPI и port 76 от сегашните тестове;
+2. 3–5-дневен API/licence spike и избор на един host client;
+3. foreground TCP PhoneAPI interop с Android/Linux;
+4. CoreBluetooth, reconnect и same-room pure-LoRa text;
+5. state restoration, screen-off, energy и physical-device soak;
+6. едва след това small resource/PTT и multi-hop/MQTT-assisted тестове.
+
+Реалистичната оценка за integrated beta е 8–12 person-weeks с опитен
+mobile/network developer. Нужни са macOS/Xcode, signing/TestFlight достъп,
+physical iPhone и Meshtastic radio; Linux тестовете могат да валидират wire
+fixtures, но не и CoreBluetooth lifecycle-а.
+
 ## Следващи, но не текущи задачи
 
 - Android three-peer и multi-hop field acceptance, route-conflict/expiry и BLE
   reconnect измерване;
 - serialized resource multi-hop drain/timeout/ChUtil и oversize-boundary тест;
 - Linux multi-radio active/passive failover и receive diversity;
+- managed `internal`/`boundary` public-uplink profile и negative-flood test;
+- iOS fixture/API spike и foreground TCP proof;
 - release packaging, NixOS service и production diagnostics;
 - по-широки Android OEM и firmware soak тестове.
 

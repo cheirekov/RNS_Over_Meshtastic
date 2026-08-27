@@ -100,6 +100,24 @@ Do not publish port 4242 directly to the public Internet. Without TCP IFAC,
 bind only to a trusted LAN/VPN address and enforce access with the host
 firewall. IFAC is strongly recommended beyond a controlled baseline.
 
+## Public Reticulum connectivity
+
+Do not add a public peer as another unrestricted `gateway` beside the radio.
+The accepted target design keeps the Meshtastic and private LAN/VPN interfaces
+on the `internal` side and uses an outbound `boundary` interface for each
+explicitly permitted public upstream. The public interface also sets
+`announces_from_internal = no`. This prevents a public announce domain from
+being rebroadcast over LoRa and prevents radio/LAN announces from being
+exported automatically, while private clients can still request a specific
+outside path on demand.
+
+The current managed Compose renderer does **not** expose a public-upstream
+variable yet. Do not hand-edit the generated container config and assume the
+change is persistent. The implementation and acceptance gates are recorded in
+[PUBLIC_BOUNDARY_AND_IOS.md](PUBLIC_BOUNDARY_AND_IOS.md). A second independent
+`rnsd` is reserved for strict isolation; connecting two instances with a normal
+RNS interface creates a forwarding path and is not strict isolation.
+
 ## Start and inspect
 
 ```bash
