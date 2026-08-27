@@ -16,6 +16,9 @@ expiry, retrieval and encryption remain LXMF responsibilities.
 The image is reproducible from `uv.lock` and currently pins LXMF 1.1.1. Both
 services run as an unprivileged UID after rendering their managed config. Linux
 capabilities are dropped and the container root filesystems are read-only.
+All Compose services use the same locally tagged image, and only `rnsd` renders
+the shared managed profile. This prevents an older `lxmd` or one-shot status
+container from overwriting a newly generated config during an upgrade.
 
 ## Configure
 
@@ -103,20 +106,29 @@ firewall. IFAC is strongly recommended beyond a controlled baseline.
 ## Public Reticulum connectivity
 
 Do not add a public peer as another unrestricted `gateway` beside the radio.
-The accepted target design keeps the Meshtastic and private LAN/VPN interfaces
-on the `internal` side and uses an outbound `boundary` interface for each
-explicitly permitted public upstream. The public interface also sets
-`announces_from_internal = no`. This prevents a public announce domain from
-being rebroadcast over LoRa and prevents radio/LAN announces from being
-exported automatically, while private clients can still request a specific
-outside path on demand.
+The managed profile accepts an explicit comma-separated endpoint list:
 
-The current managed Compose renderer does **not** expose a public-upstream
-variable yet. Do not hand-edit the generated container config and assume the
-change is persistent. The implementation and acceptance gates are recorded in
-[PUBLIC_BOUNDARY_AND_IOS.md](PUBLIC_BOUNDARY_AND_IOS.md). A second independent
-`rnsd` is reserved for strict isolation; connecting two instances with a normal
-RNS interface creates a forwarding path and is not strict isolation.
+```dotenv
+RNS_PUBLIC_UPSTREAMS=193.193.182.147:4242
+```
+
+With an empty value, public connectivity is disabled and the existing radio and
+LAN interfaces remain `gateway`. With one or more endpoints, the renderer makes
+the Meshtastic and private LAN/VPN interfaces `internal`; each outbound
+`BackboneInterface` is `boundary` and has
+`announces_from_internal = No`. Public announces are therefore not automatically
+rebroadcast over LoRa, and radio/LAN announces are not automatically exported.
+A private client can still request a specific outside path on demand.
+
+Add at most eight explicitly permitted `host:port` endpoints, one at a time.
+IPv6 literals use `[address]:port`. URLs, credentials, comments, duplicates,
+invalid hosts and invalid ports are rejected before `rnsd` starts. The private
+TCP listener must remain bound to a trusted LAN/VPN address; the public entries
+are outbound connections and do not publish a new host port.
+
+`mode` and IFAC are routing/isolation controls, not an application firewall.
+The one-instance caveat and the two-instance strict-isolation alternative are
+documented in [PUBLIC_BOUNDARY_AND_IOS.md](PUBLIC_BOUNDARY_AND_IOS.md).
 
 ## Start and inspect
 
@@ -139,8 +151,37 @@ docker compose --env-file .env.linux-service -f compose.linux.yaml exec -T \
 
 Expected RNS status includes the Meshtastic hub, the LAN/VPN TCP server and the
 shared local instance. `lxmd-status` prints the propagation destination and
-store/peer information. `LXMD_AUTOPEER=no` is deliberate: it prevents an
-unbounded peering/sync workload on the constrained LoRa segment.
+store/peer information. `LXMD_AUTOPEER=no` and `LXMD_FROM_STATIC_ONLY=yes` are
+deliberate: they prevent automatic peering and reject propagation sync offers
+from arbitrary public nodes. Direct client propagation delivery remains
+available. Set explicit static peers only as a separate measured experiment.
+
+### Public/LoRa traffic baseline
+
+The profile can store a counter snapshot in the persistent RNS volume and then
+report the change over a test window. Save the baseline immediately before the
+test:
+
+```bash
+docker compose --env-file .env.linux-service -f compose.linux.yaml \
+  run --rm traffic-baseline
+```
+
+After the idle or message test, print the delta:
+
+```bash
+docker compose --env-file .env.linux-service -f compose.linux.yaml \
+  run --rm traffic-report
+```
+
+The report separates `LoRa RNS payload`, `Public boundary aggregate` and the
+private TCP listener, plus each configured public connection. In
+`auto_multi_peer`, inbound bytes live on dynamic peer interfaces while outbound
+bytes also appear on them; the report deliberately adds peer RX but not peer TX
+to the physical parent, avoiding double-counting. Values are RNS frame bytes
+accepted by interfaces, not Meshtastic protobuf/framing overhead, RF airtime or
+`ChUtil`. A daemon restart invalidates a baseline and is reported explicitly;
+save a fresh baseline before continuing.
 
 The native backend replaces the complete Meshtastic PhoneAPI session after a
 TCP reset or write failure. A normal recovery sequence in `rnsd` logs is

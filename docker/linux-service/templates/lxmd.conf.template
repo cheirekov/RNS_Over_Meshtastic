@@ -4,6 +4,7 @@ node_name = $LXMD_NODE_NAME
 announce_interval = $LXMD_ANNOUNCE_INTERVAL
 announce_at_start = yes
 autopeer = $LXMD_AUTOPEER
+from_static_only = $LXMD_FROM_STATIC_ONLY
 autopeer_maxdepth = 3
 max_peers = 4
 message_storage_limit = $LXMD_STORAGE_LIMIT_MB

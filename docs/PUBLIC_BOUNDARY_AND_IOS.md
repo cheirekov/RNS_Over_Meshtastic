@@ -1,9 +1,8 @@
 # Public Reticulum boundary and iOS direction
 
 This document records two design decisions that follow the Android 0.2.2 and
-Linux `auto_multi_peer` field work. It is an architecture decision, not a claim
-that the managed Docker profile already configures a public upstream or that an
-iOS build exists in this repository.
+Linux `auto_multi_peer` field work. The managed Docker profile now implements
+the public boundary; an iOS build does not yet exist in this repository.
 
 ## Home gateway connected to public Reticulum
 
@@ -52,7 +51,7 @@ trusted upstreams. Prefer `BackboneInterface` where the remote supports it;
 Reticulum recommends it over the older TCP interfaces for public entry points.
 Do not publish the home LAN client listener directly on the Internet.
 
-An illustrative future RNS configuration is:
+The renderer produces the following policy from `RNS_PUBLIC_UPSTREAMS`:
 
 ```ini
 [[Meshtastic radio hub]]
@@ -78,9 +77,10 @@ An illustrative future RNS configuration is:
   announces_from_internal = no
 ```
 
-This fragment documents the target policy only. The managed Compose renderer
-does not yet expose these public-uplink variables, and a real hostname must not
-be added until its operator has explicitly permitted the connection.
+The endpoint list is disabled by default, bounded to eight entries and validated
+before daemon startup. The first accepted deployment endpoint is configured as
+`RNS_PUBLIC_UPSTREAMS=193.193.182.147:4242`. Operators must still have permission
+to use every server they add.
 
 ### What this policy is not
 
@@ -93,6 +93,9 @@ The one-instance design also has a narrow caveat: destinations originating
 locally on the home Transport instance, such as its own `lxmd` propagation
 service, can announce on active interfaces. LXMF identity authentication and
 small quotas protect mailbox access, but do not make the service invisible.
+The managed profile additionally defaults to `LXMD_FROM_STATIC_ONLY=yes`, which
+rejects arbitrary propagation-node sync offers while retaining direct client
+delivery. This is workload containment, not strict service isolation.
 
 ### Strict-isolation alternative
 
@@ -117,7 +120,8 @@ outside reachability is a stated security requirement.
 
 ### Acceptance gates before enabling a public uplink
 
-1. Capture a five-minute idle baseline with no public uplink.
+1. Run `traffic-baseline`, capture a five-minute idle window with no public
+   uplink and save its `traffic-report`.
 2. Add exactly one permitted upstream as `boundary`, with
    `announces_from_internal = no`.
 3. Verify that public announce activity increases on the boundary interface but
@@ -242,4 +246,3 @@ checks, but cannot replace device-level CoreBluetooth validation.
 - [Meshtastic Apple](https://github.com/meshtastic/Meshtastic-Apple)
 - [Reticulum Mobile App](https://github.com/thatSFguy/reticulum-mobile-app)
 - [Retichat iOS](https://github.com/jrl290/Retichat-ios)
-

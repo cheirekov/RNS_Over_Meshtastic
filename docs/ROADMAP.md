@@ -641,8 +641,12 @@ Mode и IFAC не са firewall. При изискване външната ст
 instance-а. Обикновена TCP/Backbone връзка между тях би премахнала твърдата
 изолация; бъдещ policy relay трябва да работи на LXMF ниво с identity/size/rate/
 expiry allowlist. Пълната схема и acceptance gates са в
-`docs/PUBLIC_BOUNDARY_AND_IOS.md`. Managed public-upstream renderer още не е
-реализиран и не се добавя реален server без разрешение от оператора му.
+`docs/PUBLIC_BOUNDARY_AND_IOS.md`. Managed renderer-ът вече приема до осем
+валидирани `host:port` upstream-а, превключва private интерфейсите на `internal`,
+създава outbound `BackboneInterface` в `boundary` режим и фиксира
+`announces_from_internal = no`. Добавени са persistent baseline/delta counters
+за LoRa, public boundary и private TCP без double-count на dynamic radio peers.
+Полевият negative-flood acceptance започва с един разрешен сървър.
 
 ## Приоритет 4 — iOS interface, не отделен background bridge
 
@@ -677,7 +681,7 @@ fixtures, но не и CoreBluetooth lifecycle-а.
   reconnect измерване;
 - serialized resource multi-hop drain/timeout/ChUtil и oversize-boundary тест;
 - Linux multi-radio active/passive failover и receive diversity;
-- managed `internal`/`boundary` public-uplink profile и negative-flood test;
+- managed `internal`/`boundary` public-uplink negative-flood и demand-path test;
 - iOS fixture/API spike и foreground TCP proof;
 - release packaging, NixOS service и production diagnostics;
 - по-широки Android OEM и firmware soak тестове.

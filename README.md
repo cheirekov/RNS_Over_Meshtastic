@@ -21,7 +21,7 @@ MQTT configuration. Configure radios with an official Meshtastic client first.
 | Serialized small resources | Laboratory acceptance complete | RNS frames of 3,747 B/19 fragments and 7,907 B/40 fragments crossed pure LoRa with proofs and no missing fragments. |
 | Queue, power and background hardening | Active | Bounded queues, pacing and Android foreground operation are implemented; longer field tests continue. |
 | Linux LXMF propagation service | Implemented, field acceptance pending | Reproducible non-root `rnsd` + `lxmd` containers, persistent state and conservative quotas are available. |
-| Public-network boundary | Architecture fixed, implementation pending | Private radio/LAN interfaces use `internal`; an explicitly permitted outbound public uplink uses `boundary` with private announce export disabled. |
+| Public-network boundary | Implemented, acceptance active | Up to eight explicit outbound upstreams use `boundary`; radio/LAN become `internal`, private announce export is disabled, and baseline/delta traffic reporting is available. |
 | iOS bridge | Feasibility and delivery plan complete | The supported direction is an in-process interface inside an iOS Reticulum/LXMF client, not a standalone cross-app background bridge. |
 | Production readiness | Not claimed | Capacity limits, delivery behaviour and failure recovery still need wider measurement and soak testing. |
 
@@ -50,6 +50,10 @@ The Linux/NixOS implementation provides:
 - optional Reticulum IFAC isolation with `network_name` and `passphrase`;
 - an optional Docker service profile with separate `rnsd` and `lxmd` processes,
   persistent identities/message storage and no host-side Python installation.
+- optional outbound public `BackboneInterface` connections with strict endpoint
+  validation, Reticulum `boundary` policy and no automatic internal-announce
+  export; a persistent baseline/delta report separates LoRa, public and private
+  TCP RNS payload counters without double-counting dynamic radio peers.
 
 Android bridge 0.2.2 provides:
 
@@ -180,7 +184,7 @@ The following have been exercised on real hardware and clients:
 - MQTT downlink with a non-zero hop limit on a broker whose deployment permits
   it, including a returned Meshtastic routing ACK.
 
-Automated validation currently contains 60 Python tests and 75 Android unit
+Automated validation currently contains 76 Python tests and 75 Android unit
 tests, in addition to Android lint and containerised APK builds. Exact,
 repeatable procedures and the distinction between native Meshtastic DM and the
 decoded MQTT virtual-node path are in [docs/TESTING.md](docs/TESTING.md).
@@ -215,9 +219,9 @@ Work after the MVP is deliberately measurement-driven:
 8. Evaluate multiple Linux radios first as active/passive failover or receive
    diversity. Same-channel bandwidth aggregation is not assumed to be safe or
    useful.
-9. Add a controlled public-network profile only after the documented
-   `internal`/`boundary` acceptance proves that public announces do not consume
-   LoRa airtime. Do not expose the private TCP listener publicly.
+9. Run the controlled one-upstream `internal`/`boundary` acceptance and compare
+   baseline/delta LoRa counters before adding each further public server. Do not
+   expose the private TCP listener publicly.
 10. Begin the iOS adapter with shared binary fixtures and a foreground TCP
    proof against an existing iOS Reticulum/LXMF client; BLE/background work
    follows only after that proof.

@@ -9,6 +9,7 @@ x-linux-environment: &linux-environment
   RNS_GATEWAY_NODE: ${RNS_GATEWAY_NODE:-}
   RNS_ALLOWED_NODES: ${RNS_ALLOWED_NODES:-}
   RNS_MAX_PEERS: ${RNS_MAX_PEERS:-32}
+  RNS_PUBLIC_UPSTREAMS: ${RNS_PUBLIC_UPSTREAMS:-}
   RNS_RADIO_IFAC_NAME: ${RNS_RADIO_IFAC_NAME:-}
   RNS_RADIO_IFAC_PASSPHRASE: ${RNS_RADIO_IFAC_PASSPHRASE:-}
   RNS_TCP_IFAC_NAME: ${RNS_TCP_IFAC_NAME:-}
@@ -19,14 +20,17 @@ x-linux-environment: &linux-environment
   LXMD_DISPLAY_NAME: ${LXMD_DISPLAY_NAME:-RNS Meshtastic Service}
   LXMD_ANNOUNCE_INTERVAL: ${LXMD_ANNOUNCE_INTERVAL:-360}
   LXMD_AUTOPEER: ${LXMD_AUTOPEER:-no}
+  LXMD_FROM_STATIC_ONLY: ${LXMD_FROM_STATIC_ONLY:-yes}
   LXMD_STORAGE_LIMIT_MB: ${LXMD_STORAGE_LIMIT_MB:-64}
   LXMD_MESSAGE_MAX_KB: ${LXMD_MESSAGE_MAX_KB:-8}
   LXMD_SYNC_MAX_KB: ${LXMD_SYNC_MAX_KB:-64}
   LXMD_AUTH_REQUIRED: ${LXMD_AUTH_REQUIRED:-no}
   LXMD_ALLOWED_IDENTITIES: ${LXMD_ALLOWED_IDENTITIES:-}
   LXMD_LOGLEVEL: ${LXMD_LOGLEVEL:-4}
+  RNS_RENDER_PROFILE: "no"
 
 x-linux-service: &linux-service
+  image: rns-over-meshtastic-linux-service:local
   build:
     context: .
     dockerfile: docker/linux-service/Dockerfile
@@ -45,6 +49,9 @@ x-linux-service: &linux-service
 services:
   rnsd:
     <<: *linux-service
+    environment:
+      <<: *linux-environment
+      RNS_RENDER_PROFILE: "yes"
     command: ["rnsd", "--config", "/data/rns", "--verbose"]
     restart: unless-stopped
     ports:
@@ -71,6 +78,39 @@ services:
     <<: *linux-service
     profiles: ["tools"]
     command: ["rnstatus", "--config", "/data/rns", "--all", "--totals"]
+    network_mode: service:rnsd
+    depends_on:
+      rnsd:
+        condition: service_healthy
+    restart: "no"
+
+  traffic-baseline:
+    <<: *linux-service
+    profiles: ["tools"]
+    command:
+      - rns-meshtastic
+      - traffic-report
+      - --config-dir
+      - /data/rns
+      - --baseline-file
+      - /data/rns/traffic-baseline.json
+      - --save-baseline
+    network_mode: service:rnsd
+    depends_on:
+      rnsd:
+        condition: service_healthy
+    restart: "no"
+
+  traffic-report:
+    <<: *linux-service
+    profiles: ["tools"]
+    command:
+      - rns-meshtastic
+      - traffic-report
+      - --config-dir
+      - /data/rns
+      - --baseline-file
+      - /data/rns/traffic-baseline.json
     network_mode: service:rnsd
     depends_on:
       rnsd:

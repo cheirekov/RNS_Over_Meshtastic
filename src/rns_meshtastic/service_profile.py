@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 import re
 import tempfile
@@ -10,6 +11,11 @@ from string import Template
 
 NODE_ID = re.compile(r"![0-9a-fA-F]{8}")
 IDENTITY_HASH = re.compile(r"[0-9a-fA-F]{32}")
+HOSTNAME = re.compile(
+    r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+)
+MAX_PUBLIC_UPSTREAMS = 8
 
 
 def _value(environment: Mapping[str, str], name: str, default: str | None = None) -> str:
@@ -47,6 +53,78 @@ def _optional_value(environment: Mapping[str, str], name: str) -> str:
     if not environment.get(name, "").strip():
         return ""
     return _value(environment, name)
+
+
+def _validate_public_host(host: str) -> str:
+    if not host:
+        raise ValueError("RNS_PUBLIC_UPSTREAMS contains an empty host")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        if "." in host and host.replace(".", "").isdigit():
+            raise ValueError("RNS_PUBLIC_UPSTREAMS contains an invalid IP address") from None
+        if HOSTNAME.fullmatch(host) is None:
+            raise ValueError(
+                "RNS_PUBLIC_UPSTREAMS hosts must be IP addresses or valid DNS names"
+            ) from None
+    return host
+
+
+def _public_endpoint(value: str) -> tuple[str, int]:
+    value = value.strip()
+    if not value:
+        raise ValueError("RNS_PUBLIC_UPSTREAMS cannot contain empty entries")
+    if any(character in value for character in "\r\n#;/@"):
+        raise ValueError("RNS_PUBLIC_UPSTREAMS contains an unsafe endpoint")
+
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing < 0 or closing + 1 >= len(value) or value[closing + 1] != ":":
+            raise ValueError(
+                "RNS_PUBLIC_UPSTREAMS IPv6 endpoints must use [address]:port"
+            )
+        host = value[1:closing]
+        port_text = value[closing + 2 :]
+    else:
+        if value.count(":") != 1:
+            raise ValueError("RNS_PUBLIC_UPSTREAMS entries must use host:port")
+        host, port_text = value.rsplit(":", 1)
+
+    host = _validate_public_host(host.strip())
+    try:
+        port = int(port_text)
+    except ValueError as error:
+        raise ValueError("RNS_PUBLIC_UPSTREAMS ports must be integers") from error
+    if port < 1 or port > 65535:
+        raise ValueError("RNS_PUBLIC_UPSTREAMS ports must be between 1 and 65535")
+    return host, port
+
+
+def _public_upstream_configuration(environment: Mapping[str, str]) -> tuple[str, str]:
+    raw = environment.get("RNS_PUBLIC_UPSTREAMS", "").strip()
+    if not raw:
+        return "gateway", "  # No public boundary upstreams configured"
+    entries = raw.split(",")
+    if len(entries) > MAX_PUBLIC_UPSTREAMS:
+        raise ValueError(
+            f"RNS_PUBLIC_UPSTREAMS supports at most {MAX_PUBLIC_UPSTREAMS} endpoints"
+        )
+    endpoints = [_public_endpoint(entry) for entry in entries]
+    if len(set(endpoints)) != len(endpoints):
+        raise ValueError("RNS_PUBLIC_UPSTREAMS cannot contain duplicate endpoints")
+
+    blocks = []
+    for index, (host, port) in enumerate(endpoints, start=1):
+        blocks.append(
+            f"  [[Public boundary {index}]]\n"
+            "    type = BackboneInterface\n"
+            "    enabled = Yes\n"
+            "    mode = boundary\n"
+            f"    target_host = {host}\n"
+            f"    target_port = {port}\n"
+            "    announces_from_internal = No"
+        )
+    return "internal", "\n\n".join(blocks)
 
 
 def _ifac_configuration(
@@ -108,6 +186,8 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
     if forwarding not in {"inherit", "force_off"}:
         raise ValueError("MESHTASTIC_MQTT_FORWARDING_POLICY must be inherit or force_off")
 
+    private_interface_mode, public_upstream_block = _public_upstream_configuration(environment)
+
     radio_name, radio_passphrase, radio_ifac = _ifac_configuration(
         environment, "RNS_RADIO_IFAC", "radio"
     )
@@ -149,6 +229,8 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
         "RNS_ALLOWED_NODES_LINE": _node_list(environment, mesh_mode, gateway_role),
         "RNS_ACCEPT_BROADCAST_ON_HUB": "Yes" if mesh_mode == "auto_multi_peer" else "No",
         "RNS_MAX_PEERS": str(_integer(environment, "RNS_MAX_PEERS", 32, 1, 512)),
+        "RNS_PRIVATE_INTERFACE_MODE": private_interface_mode,
+        "RNS_PUBLIC_UPSTREAM_BLOCK": public_upstream_block,
         "RNS_RADIO_IFAC_BLOCK": radio_ifac,
         "RNS_TCP_IFAC_BLOCK": tcp_ifac,
         "RNS_TCP_LISTEN_PORT": str(
@@ -160,6 +242,7 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
             _integer(environment, "LXMD_ANNOUNCE_INTERVAL", 360, 60, 10_080)
         ),
         "LXMD_AUTOPEER": _yes_no(environment, "LXMD_AUTOPEER", "no"),
+        "LXMD_FROM_STATIC_ONLY": _yes_no(environment, "LXMD_FROM_STATIC_ONLY", "yes"),
         "LXMD_STORAGE_LIMIT_MB": str(
             _integer(environment, "LXMD_STORAGE_LIMIT_MB", 64, 8, 4096)
         ),

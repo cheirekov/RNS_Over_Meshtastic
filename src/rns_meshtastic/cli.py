@@ -354,6 +354,22 @@ def _mqtt_radio_probe(args: argparse.Namespace) -> int:
         client.loop_stop()
 
 
+def _traffic_report(args: argparse.Namespace) -> int:
+    from rns_meshtastic.traffic_report import traffic_report
+
+    try:
+        output = traffic_report(
+            Path(args.config_dir),
+            Path(args.baseline_file),
+            save_baseline_only=args.save_baseline,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(output)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rns-meshtastic")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -409,6 +425,19 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--tls-insecure", action="store_true")
     probe.add_argument("--timeout", type=float, default=30.0)
     probe.set_defaults(func=_mqtt_radio_probe)
+
+    traffic = sub.add_parser(
+        "traffic-report",
+        help="compare LoRa, public-boundary and private TCP RNS traffic",
+    )
+    traffic.add_argument("--config-dir", default="/data/rns")
+    traffic.add_argument("--baseline-file", default="/data/rns/traffic-baseline.json")
+    traffic.add_argument(
+        "--save-baseline",
+        action="store_true",
+        help="replace the baseline with current counters instead of reporting",
+    )
+    traffic.set_defaults(func=_traffic_report)
     return parser
 
 

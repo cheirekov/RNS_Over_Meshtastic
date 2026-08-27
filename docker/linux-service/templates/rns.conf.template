@@ -10,7 +10,7 @@
   [[Meshtastic radio hub]]
     type = RNSMeshtasticInterface
     enabled = Yes
-    mode = gateway
+    mode = $RNS_PRIVATE_INTERFACE_MODE
 
     transport = native
     connection = tcp
@@ -37,8 +37,10 @@ $RNS_RADIO_IFAC_BLOCK
   [[LAN VPN Reticulum clients]]
     type = TCPServerInterface
     enabled = Yes
-    mode = gateway
+    mode = $RNS_PRIVATE_INTERFACE_MODE
     listen_ip = 0.0.0.0
     listen_port = $RNS_TCP_LISTEN_PORT
 
 $RNS_TCP_IFAC_BLOCK
+
+$RNS_PUBLIC_UPSTREAM_BLOCK

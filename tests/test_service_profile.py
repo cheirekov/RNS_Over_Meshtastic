@@ -29,8 +29,11 @@ def test_renders_restricted_gateway_and_bounded_lxmd(tmp_path: Path) -> None:
     assert "accept_broadcast_on_hub = No" in rns_config
     assert "max_peers = 32" in rns_config
     assert "allowed_nodes = !a1b3b3b8, !8fd13c64" in rns_config
+    assert "mode = gateway" in rns_config
+    assert "No public boundary upstreams configured" in rns_config
     assert "network_name = radio-private" in rns_config
     assert "autopeer = no" in lxmd_config
+    assert "from_static_only = yes" in lxmd_config
     assert "message_storage_limit = 64" in lxmd_config
     assert "propagation_message_max_accepted_size = 8" in lxmd_config
     assert "propagation_sync_max_accepted_size = 64" in lxmd_config
@@ -69,6 +72,52 @@ def test_auto_multi_peer_can_limit_discovery_with_allowlist(tmp_path: Path) -> N
     config = (tmp_path / "rns" / "config").read_text()
     assert "accept_broadcast_on_hub = Yes" in config
     assert "allowed_nodes = !a1b3b3b8, !8fd13c64" in config
+
+
+def test_public_upstreams_render_as_boundaries_and_make_private_interfaces_internal(
+    tmp_path: Path,
+) -> None:
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    values = environment() | {
+        "RNS_PUBLIC_UPSTREAMS": "193.193.182.147:4242,[2001:db8::1]:4243",
+    }
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    assert config.count("mode = internal") == 2
+    assert config.count("mode = boundary") == 2
+    assert "target_host = 193.193.182.147" in config
+    assert "target_port = 4242" in config
+    assert "target_host = 2001:db8::1" in config
+    assert "target_port = 4243" in config
+    assert config.count("announces_from_internal = No") == 2
+
+
+@pytest.mark.parametrize(
+    "upstreams",
+    [
+        "missing-port",
+        "host.example:not-a-port",
+        "host_name.example:4242",
+        "user@host.example:4242",
+        "[2001:db8::1:4242",
+        "host.example:0",
+        "host.example:65536",
+        "999.999.999.999:4242",
+        "host.example:4242,",
+        "host.example:4242,host.example:4242",
+    ],
+)
+def test_rejects_invalid_public_upstreams(upstreams: str) -> None:
+    values = environment() | {"RNS_PUBLIC_UPSTREAMS": upstreams}
+    with pytest.raises(ValueError, match="RNS_PUBLIC_UPSTREAMS"):
+        configuration_values(values)
+
+
+def test_rejects_more_than_eight_public_upstreams() -> None:
+    upstreams = ",".join(f"192.0.2.{index}:4242" for index in range(1, 10))
+    values = environment() | {"RNS_PUBLIC_UPSTREAMS": upstreams}
+    with pytest.raises(ValueError, match="at most 8"):
+        configuration_values(values)
 
 
 def test_rejects_reused_ifac_credentials() -> None:
