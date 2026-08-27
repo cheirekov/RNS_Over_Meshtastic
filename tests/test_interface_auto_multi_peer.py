@@ -20,11 +20,13 @@ class FakeBackend:
 
     def __init__(self) -> None:
         self.packet_callback = None
+        self.state_callback = None
         self.sent: list[tuple[bytes, str]] = []
         self.sent_event = threading.Event()
 
     def start(self, packet_callback, state_callback) -> None:
         self.packet_callback = packet_callback
+        self.state_callback = state_callback
         state_callback(True, None)
 
     def send(self, payload: bytes, destination: str) -> None:
@@ -127,5 +129,29 @@ def test_auto_multi_peer_open_discovery_is_bounded_by_peer_limit(monkeypatch) ->
 
         assert [peer.peer_node for peer in interface.spawned_interfaces] == ["!a1b3b3b8"]
         assert [frame for frame, _peer in owner.received] == [b"first peer"]
+    finally:
+        interface.detach()
+
+
+def test_auto_multi_peer_child_tracks_physical_transport_state(monkeypatch) -> None:
+    interface, backend, owner = make_interface(monkeypatch)
+    try:
+        assert backend.packet_callback is not None
+        assert backend.state_callback is not None
+        backend.packet_callback(
+            "!a1b3b3b8",
+            BROADCAST_ID,
+            broadcast_frame(b"discovery"),
+        )
+        peer = owner.received[0][1]
+        assert peer.online
+
+        backend.state_callback(False, "test disconnect")
+        assert not interface.online
+        assert not peer.online
+
+        backend.state_callback(True, None)
+        assert interface.online
+        assert peer.online
     finally:
         interface.detach()

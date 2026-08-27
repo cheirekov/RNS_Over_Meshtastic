@@ -645,6 +645,31 @@ fragment (8 KiB ≈ 41 fragments ≈ 82 s), плюс proof/repair и adaptive pa
 Следете ChUtil и прекратете теста при регулаторен/device reject; bridge-ът не
 включва duty-cycle override.
 
+### Фаза K — 0.2.1 learned-unicast и Linux reconnect regression
+
+Използвайте топологията от Фаза I, без IFAC и без resource/burst. На Android
+0.2.1 изберете `auto_multi_peer`, а на Linux — `auto_multi_peer/hub`. Запазете
+`inherit` само ако искате реалния LoRa/MQTT маршрут; за чиста LoRa изолация
+изберете `force_off` и на двата края.
+
+1. Рестартирайте bridge сесията, направете announce Android→Linux, после
+   Linux-TCP-client→Android и изчакайте peer/route learning.
+2. Изпратете по един номериран кратък текст във всяка посока и изчакайте proof.
+   Android `addressing ... unicast` трябва да стане ненула. `last route` за
+   direct chat не трябва постоянно да остава `RNS plain/group → ^all`.
+3. Прекъснете само Linux↔Meshtastic TCP/Wi-Fi връзката за 20–40 секунди, без да
+   спирате `rnsd`, после я възстановете. Не изпращайте burst по време на outage.
+4. Linux логът трябва да покаже `transport offline`, reconnect опити при нужда
+   и `transport connected`. `rnstatus` показва parent и child `Down` по време
+   на прекъсването и отново `Up` след него.
+5. След reconnect направете нов announce и разменете `RECOVER-A1/B1`. Копирайте
+   Android diagnostics, Linux `rnstatus`, `rnpath` и логовете преди restart.
+
+Приемане: ненулев Android learned-unicast, двупосочен payload/proof преди и
+след прекъсването, автоматично Linux възстановяване без container restart и
+без останали missing assemblies. Broadcast остава допустим за announce,
+unknown, истински PLAIN/GROUP и opaque IFAC кадри.
+
 ### Записан laboratory acceptance — 2026-08-16
 
 Фази H и J са приети за два bridge-а в една стая, pure LoRa, channel 1,

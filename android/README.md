@@ -160,6 +160,16 @@ inbound spool replayed nine frames on the Honor side and one on the Pixel side.
 Reconnect frequency remains an explicit screen-off and multi-hop field-test
 observation, not a closed reliability result.
 
+Version 0.2.1 fixes a destination-type interoperability defect found by the
+first Android-to-Linux `auto_multi_peer` run. Reticulum encodes `SINGLE=0`,
+`GROUP=1`, `PLAIN=2` and `LINK=3`; 0.2.0 had the first three labels shifted.
+The frame remained byte-for-byte intact and delivery over broadcast could
+still work, but ordinary single-destination LXMF traffic could not select its
+learned Meshtastic unicast route. Diagnostics exposed this as a non-empty peer
+table together with `addressing broadcast/unicast N/0` and `RNS plain/group`.
+0.2.1 uses the correct wire values and has an explicit regression test for
+them.
+
 ## Reproducible build
 
 No Android SDK or Gradle installation is required on the host:

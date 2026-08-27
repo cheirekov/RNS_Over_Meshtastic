@@ -124,6 +124,16 @@ shared local instance. `lxmd-status` prints the propagation destination and
 store/peer information. `LXMD_AUTOPEER=no` is deliberate: it prevents an
 unbounded peering/sync workload on the constrained LoRa segment.
 
+The native backend replaces the complete Meshtastic PhoneAPI session after a
+TCP reset or write failure. A normal recovery sequence in `rnsd` logs is
+`transport offline` followed by `transport connected`; reconnect attempts use
+bounded exponential backoff up to 30 seconds. Existing dynamic peer interfaces
+are marked down with the parent and restored after reconnect, while already
+admitted outbound fragments remain in the bounded scheduler queue. If status
+shows the parent `Down` for longer than the backoff while the radio TCP port is
+reachable, capture the logs; restarting `rnsd` should be recovery, not the
+normal operating mechanism.
+
 ## Conservative propagation limits
 
 Defaults are intentionally small:
@@ -183,6 +193,12 @@ Meshtastic radio; a second phone is not involved.
    receive it through the learned Linux radio peer.
 6. Exchange one numbered short text in each direction and wait for LXMF proofs.
    Only then test a burst, propagation delivery or a small resource.
+
+For Android 0.2.1+, once a route has been learned, ordinary single-destination
+traffic should increase the Android diagnostic `unicast` counter. Announces,
+Reticulum `PLAIN`/`GROUP`, unknown destinations and IFAC-opaque frames can still
+increase `broadcast` by design. A populated peer table with sustained `N/0`
+addressing during direct single-destination chat is a regression signal.
 
 If an allowlist is enabled, it contains radio Node IDs such as `!a1b3b3b8`, not
 Reticulum destination hashes. A TCP client announce sent before any radio peer

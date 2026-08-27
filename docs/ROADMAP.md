@@ -535,6 +535,18 @@ Pixel session-ът има `radio up/down 3/2`; понеже няма drop/reasse
 това не блокира 0.2.0 acceptance, но BLE reconnect честотата остава метрика за
 следващия screen-off и multi-hop тест.
 
+Първият Android→Linux `auto_multi_peer` тест на 2026-08-27 откри две отделни
+коректностни грешки. Android 0.2.0 е използвал разместени RNS destination wire
+стойности и затова нормалният `SINGLE=0` LXMF трафик е бил отчетен като
+`PLAIN`, с резултат `68 broadcast / 0 unicast` въпреки 54 научени routes.
+0.2.1 възстановява `SINGLE=0`, `GROUP=1`, `PLAIN=2`, `LINK=3` и ги заключва с
+регресионен unit test. Linux Meshtastic TCP reader-ът отделно е приключил при
+`ECONNRESET`, а библиотечният heartbeat по-късно е получил `BrokenPipeError`
+без работещ reader след вътрешния reconnect. Native backend-ът вече заменя
+цялата PhoneAPI сесия с bounded exponential backoff; child peer status следва
+физическия parent. Следващият acceptance тест трябва да докаже едновременно
+ненулев learned-unicast counter и автоматично възстановяване след прекъсване.
+
 ## Приоритет 3 — optional Linux service profile
 
 Linux остава незадължителен за директна Android връзка, но може да комбинира

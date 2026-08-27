@@ -265,6 +265,9 @@ class RNSMeshtasticInterface(Interface):
 
     def _on_backend_state(self, online: bool, detail: str | None) -> None:
         self.online = online
+        with self._peer_lock:
+            for peer in self.spawned_interfaces:
+                peer.online = online
         if online:
             self._backend_online.set()
             self.local_node_id = self.backend.local_node_id
@@ -419,7 +422,7 @@ class MeshtasticPeerInterface(Interface):
         self.bitrate = parent.bitrate
         self.IN = True
         self.OUT = True
-        self.online = True
+        self.online = parent.online
 
     def process_outgoing(self, data: bytes) -> None:
         if self.online:

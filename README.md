@@ -49,7 +49,7 @@ The Linux/NixOS implementation provides:
 - an optional Docker service profile with separate `rnsd` and `lxmd` processes,
   persistent identities/message storage and no host-side Python installation.
 
-Android bridge 0.2.0 provides:
+Android bridge 0.2.1 provides:
 
 - a direct BLE or TCP PhoneAPI connection without depending on the official
   Meshtastic Android app;
@@ -123,6 +123,14 @@ Android bridge 0.2.0 provides:
   stretches fragment pacing before the Meshtastic firmware queue fills;
   `transparent` uses the configured fixed interval.
 
+Version 0.2.1 corrects the Reticulum destination-type wire constants used by
+`auto_multi_peer`. Normal `SINGLE` LXMF traffic is now eligible for a learned
+Meshtastic unicast route instead of being mistaken for `PLAIN` traffic and
+broadcast. It also hardens the Linux native PhoneAPI backend: a lost TCP/serial/
+BLE session is replaced completely with bounded reconnect backoff, queued
+frames wait for the replacement transport, and dynamic radio-peer interfaces
+track the physical parent state instead of remaining falsely `Up`.
+
 The `10 Mbps` value that a Reticulum client displays belongs to the standard
 local TCP interface and is not an estimate of LoRa throughput. It is not purely
 cosmetic, however: Reticulum also uses the interface bitrate when calculating
@@ -163,7 +171,7 @@ The following have been exercised on real hardware and clients:
 - MQTT downlink with a non-zero hop limit on a broker whose deployment permits
   it, including a returned Meshtastic routing ACK.
 
-Automated validation currently contains 57 Python tests and 73 Android unit
+Automated validation currently contains 60 Python tests and 74 Android unit
 tests, in addition to Android lint and containerised APK builds. Exact,
 repeatable procedures and the distinction between native Meshtastic DM and the
 decoded MQTT virtual-node path are in [docs/TESTING.md](docs/TESTING.md).

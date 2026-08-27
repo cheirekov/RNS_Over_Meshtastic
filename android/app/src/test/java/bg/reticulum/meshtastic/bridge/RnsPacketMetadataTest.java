@@ -11,6 +11,13 @@ import java.util.Arrays;
 import org.junit.Test;
 
 public class RnsPacketMetadataTest {
+    @Test public void destinationConstantsMatchReticulumWireValues() {
+        assertEquals(0, RnsPacketMetadata.SINGLE);
+        assertEquals(1, RnsPacketMetadata.GROUP);
+        assertEquals(2, RnsPacketMetadata.PLAIN);
+        assertEquals(3, RnsPacketMetadata.LINK);
+    }
+
     @Test public void parsesHeaderOneAndHeaderTwoDestinations() {
         byte[] headerOne = packet(0, RnsPacketMetadata.SINGLE, RnsPacketMetadata.ANNOUNCE, 0x44);
         RnsPacketMetadata one = RnsPacketMetadata.parse(headerOne);

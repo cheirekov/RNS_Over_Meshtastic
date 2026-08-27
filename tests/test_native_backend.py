@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -31,17 +32,75 @@ def test_connected_notification_is_emitted_once():
 
 def test_disconnect_notification_requires_online_state():
     backend = NativeBackend(NativeConfig(connection="tcp", tcp_host="127.0.0.1"))
-    interface = object()
-    backend._interface = interface
+    first = object()
+    backend._interface = first
     states = []
     backend._state_callback = lambda online, detail: states.append((online, detail))
 
-    backend._on_disconnected(interface)
+    backend._on_disconnected(first)
+    second = object()
+    backend._interface = second
     backend._notify_connected()
-    backend._on_disconnected(interface)
-    backend._on_disconnected(interface)
+    backend._on_disconnected(second)
+    backend._on_disconnected(second)
 
     assert states == [(True, None), (False, "PhoneAPI connection lost")]
+
+
+def test_disconnect_replaces_entire_native_session(monkeypatch):
+    class ReconnectInterface:
+        def __init__(self, node_num):
+            self.closed = False
+            self.myInfo = SimpleNamespace(my_node_num=node_num)
+
+        def close(self):
+            self.closed = True
+
+    backend = NativeBackend(NativeConfig(connection="tcp", tcp_host="127.0.0.1"))
+    first = ReconnectInterface(0x11223344)
+    replacement = ReconnectInterface(0xAABBCC11)
+    backend._interface = first
+    backend._online = True
+    states = []
+    connected = threading.Event()
+
+    def state_callback(online, detail):
+        states.append((online, detail))
+        if online:
+            connected.set()
+
+    backend._state_callback = state_callback
+    monkeypatch.setattr(backend, "_open_interface", lambda: replacement)
+    backend._reconnect_thread = threading.Thread(target=backend._reconnect_loop, daemon=True)
+    backend._reconnect_thread.start()
+
+    backend._on_disconnected(first)
+
+    assert connected.wait(1.0)
+    assert backend._interface is replacement
+    assert backend.local_node_id == "!aabbcc11"
+    assert first.closed
+    assert states == [
+        (False, "PhoneAPI connection lost"),
+        (True, None),
+    ]
+    backend.close()
+
+
+def test_stale_disconnect_cannot_take_replacement_offline():
+    backend = NativeBackend(NativeConfig(connection="tcp", tcp_host="127.0.0.1"))
+    stale = object()
+    replacement = object()
+    backend._interface = replacement
+    backend._online = True
+    states = []
+    backend._state_callback = lambda online, detail: states.append((online, detail))
+
+    backend._on_disconnected(stale)
+
+    assert backend._interface is replacement
+    assert backend._online
+    assert states == []
 
 
 @pytest.mark.parametrize("mqtt_permitted", [False, True])

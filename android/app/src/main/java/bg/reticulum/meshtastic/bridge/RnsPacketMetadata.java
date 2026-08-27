@@ -11,9 +11,11 @@ final class RnsPacketMetadata {
     static final int LINK_REQUEST = 2;
     static final int PROOF = 3;
 
-    static final int PLAIN = 0;
-    static final int SINGLE = 1;
-    static final int GROUP = 2;
+    // Reticulum Destination wire values. Keep these explicit: swapping SINGLE
+    // and PLAIN silently turns normal LXMF traffic into Meshtastic broadcast.
+    static final int SINGLE = 0;
+    static final int GROUP = 1;
+    static final int PLAIN = 2;
     static final int LINK = 3;
 
     private static final int HASH_BYTES = 16;
