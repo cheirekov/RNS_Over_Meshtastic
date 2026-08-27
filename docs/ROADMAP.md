@@ -558,7 +558,9 @@ Linux остава незадължителен за директна Android в
 - отделни persistent RNS/LXMF volumes и non-root, read-only containers без
   Linux capabilities;
 - managed environment config с validation, независимо optional radio/TCP IFAC
-  и задължителен hub allowlist;
+  и първокласен Linux `auto_multi_peer` ingress; старият `gateway_unicast` hub
+  изисква allowlist, а auto mode допуска изрично bounded open discovery или
+  optional allowlist;
 - localhost-only TCP publish по подразбиране, optional LXMF identity auth;
 - 64 MiB store, 8 KiB message и 64 KiB sync limits, един inbound sync и
   `autopeer=no` по подразбиране;
@@ -568,6 +570,11 @@ Linux остава незадължителен за директна Android в
 Това още не е field acceptance. Първо се доказват daemon health и кратък
 online text, след това един short-text offline propagation/sync цикъл. Файлове,
 voice notes, autopeering и публично излагане не участват в първия тест.
+
+Linux `auto_multi_peer` вече приема Android broadcast discovery, създава
+отделен Reticulum child interface за всеки radio Node ID и връща learned traffic
+като Meshtastic unicast. Следва acceptance с един Android/BLE bridge и един
+Linux TCP client, после с поне три radio peers и активен allowlist.
 
 Локалната container acceptance е завършена: build-ът от заключения `uv.lock`
 стартира `rnsd` 1.4.2 и `lxmd` 1.1.1 като UID 10001 върху read-only rootfs,

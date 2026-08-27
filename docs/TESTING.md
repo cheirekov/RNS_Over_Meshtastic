@@ -259,6 +259,24 @@ pki_required = Yes
 
 `want_ack` увеличава airtime, но помага на Meshtastic 2.6+ да научи next hop.
 
+За Android `auto_multi_peer` към Linux hub не използвайте горната fixed-client
+двойка. На Linux задайте първокласния hub режим:
+
+```ini
+mesh_mode = auto_multi_peer
+gateway_role = hub
+accept_broadcast_on_hub = Yes
+max_peers = 32
+# allowed_nodes е optional; празно означава bounded open discovery
+```
+
+Android изпраща първия announce като broadcast. Linux създава отделен child
+interface за source Node ID и последващият learned трафик към него се изпраща
+като Meshtastic unicast. При managed Docker profile използвайте
+`RNS_MESH_MODE=auto_multi_peer`; renderer-ът задава broadcast acceptance
+автоматично. `gateway_unicast` hub остава fixed/allowlisted режим и не приема
+broadcast discovery.
+
 Стартирайте gateway и изпратете първия файл **от client към gateway**. В gateway
 log трябва да се появи:
 

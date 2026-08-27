@@ -80,7 +80,9 @@ class RNSMeshtasticInterface(Interface):
         self.allowed_nodes = _node_set(_optional(config, "allowed_nodes"))
         self.max_peers = _int(config, "max_peers", 32)
         self.tx_interval = _float(config, "tx_interval", 1.0)
-        self.accept_broadcast_on_hub = _bool(config, "accept_broadcast_on_hub", False)
+        self.accept_broadcast_on_hub = self.mesh_mode == "auto_multi_peer" or _bool(
+            config, "accept_broadcast_on_hub", False
+        )
         self._validate_mode()
 
         self.protocol = FragmentProtocol(
@@ -116,14 +118,16 @@ class RNSMeshtasticInterface(Interface):
     def _validate_mode(self) -> None:
         if self.transport_kind not in {"native", "mqtt"}:
             raise ValueError("transport must be native or mqtt")
-        if self.mesh_mode not in {"broadcast", "gateway_unicast"}:
-            raise ValueError("mesh_mode must be broadcast or gateway_unicast")
+        if self.mesh_mode not in {"broadcast", "gateway_unicast", "auto_multi_peer"}:
+            raise ValueError("mesh_mode must be broadcast, gateway_unicast or auto_multi_peer")
         if self.gateway_role not in {"client", "hub"}:
             raise ValueError("gateway_role must be client or hub")
         if self.mesh_mode == "gateway_unicast" and self.gateway_role == "client" and not self.gateway_node:
             raise ValueError("gateway_node is required for a gateway_unicast client")
         if self.mesh_mode == "broadcast" and self.gateway_role == "hub":
             raise ValueError("gateway_role=hub only applies to gateway_unicast")
+        if self.mesh_mode == "auto_multi_peer" and self.gateway_role != "hub":
+            raise ValueError("gateway_role=hub is required for auto_multi_peer")
         if not 1 <= self.max_peers <= 512:
             raise ValueError("max_peers must be between 1 and 512")
         if self.tx_interval < 0:
@@ -180,9 +184,19 @@ class RNSMeshtasticInterface(Interface):
                 f"{self}: Reticulum IFAC enabled ({self.ifac_size * 8}-bit, network {network!r})",
                 RNS.LOG_NOTICE,
             )
-        if self.mesh_mode == "gateway_unicast" and self.gateway_role == "hub":
+        if self._is_multi_peer_hub():
             self.OUT = False
             self.IN = True
+            if self.mesh_mode == "auto_multi_peer":
+                scope = (
+                    f"allowlist with {len(self.allowed_nodes)} node(s)"
+                    if self.allowed_nodes
+                    else "open radio ingress"
+                )
+                RNS.log(
+                    f"{self}: auto multi-peer discovery enabled ({scope}, max {self.max_peers} peers)",
+                    RNS.LOG_NOTICE,
+                )
         pending, self._pending_inbound = self._pending_inbound, []
         for source, destination, payload in pending:
             self._process_backend_packet(source, destination, payload)
@@ -275,7 +289,7 @@ class RNSMeshtasticInterface(Interface):
         if self.allowed_nodes and source not in self.allowed_nodes:
             RNS.log(f"{self}: ignored non-allowlisted node {source}", RNS.LOG_DEBUG)
             return
-        if self.mesh_mode == "gateway_unicast":
+        if self.mesh_mode in {"gateway_unicast", "auto_multi_peer"}:
             if self.gateway_role == "client" and source != self.gateway_node:
                 return
             if self.gateway_role == "hub":
@@ -300,7 +314,7 @@ class RNSMeshtasticInterface(Interface):
             if len(frame) > self.HW_MTU + 64:
                 RNS.log(f"{self}: ignored oversized reassembled frame ({len(frame)} bytes)", RNS.LOG_WARNING)
                 continue
-            if self.mesh_mode == "gateway_unicast" and self.gateway_role == "hub":
+            if self._is_multi_peer_hub():
                 peer = self._get_or_create_peer(source)
                 if peer is None:
                     continue
@@ -324,6 +338,12 @@ class RNSMeshtasticInterface(Interface):
             RNS.Transport.add_interface(peer)
             RNS.log(f"{self}: created Reticulum peer interface for {source}", RNS.LOG_NOTICE)
             return peer
+
+    def _is_multi_peer_hub(self) -> bool:
+        return self.gateway_role == "hub" and self.mesh_mode in {
+            "gateway_unicast",
+            "auto_multi_peer",
+        }
 
     def _copy_interface_policy(self, peer: MeshtasticPeerInterface) -> None:
         attributes = (

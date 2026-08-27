@@ -38,8 +38,8 @@ Sideband / Columba / other RNS client
 The Linux/NixOS implementation provides:
 
 - a native Meshtastic radio backend over TCP PhoneAPI, serial or BLE;
-- broadcast, configurable gateway-unicast and bounded single-peer automatic
-  addressing modes;
+- broadcast, configurable gateway-unicast and first-class bounded
+  `auto_multi_peer` hub operation;
 - one logical Reticulum child interface per unicast Meshtastic peer;
 - a Reticulum TCP server for LAN/VPN clients without their own radio;
 - a binary MQTT virtual node using Meshtastic `ServiceEnvelope` protobufs;
@@ -163,7 +163,7 @@ The following have been exercised on real hardware and clients:
 - MQTT downlink with a non-zero hop limit on a broker whose deployment permits
   it, including a returned Meshtastic routing ACK.
 
-Automated validation currently contains 49 Python tests and 73 Android unit
+Automated validation currently contains 57 Python tests and 73 Android unit
 tests, in addition to Android lint and containerised APK builds. Exact,
 repeatable procedures and the distinction between native Meshtastic DM and the
 decoded MQTT virtual-node path are in [docs/TESTING.md](docs/TESTING.md).
@@ -184,17 +184,21 @@ Work after the MVP is deliberately measurement-driven:
 4. Field-validate `auto_multi_peer` with three or more Android radios, including
    route learning/expiry, unknown-destination broadcast, allowlists and the
    documented IFAC broadcast fallback.
-5. Field-characterise the accepted serialized-bulk path over one and two LoRa
+5. Accept the Linux `auto_multi_peer` hub against one Android/BLE bridge and one
+   TCP client, then repeat with several Android radio peers and an explicit
+   allowlist. Initial peer discovery must be broadcast; learned return paths
+   must appear as per-radio child interfaces and Meshtastic unicast.
+6. Field-characterise the accepted serialized-bulk path over one and two LoRa
    hops: drain time, proof return, channel utilisation, reconnect behaviour and
    the 8 KiB oversize boundary. Treat PTT as bounded store-and-forward audio,
    not live voice capacity.
-6. Field-validate the implemented LXMF propagation node with one bounded
+7. Field-validate the implemented LXMF propagation node with one bounded
    offline short-text offer/retrieval cycle. Persistent replay of arbitrary raw
    Reticulum frames is intentionally not the design.
-7. Evaluate multiple Linux radios first as active/passive failover or receive
+8. Evaluate multiple Linux radios first as active/passive failover or receive
    diversity. Same-channel bandwidth aggregation is not assumed to be safe or
    useful.
-8. Polish release packaging, upgrade paths, diagnostics and field-test
+9. Polish release packaging, upgrade paths, diagnostics and field-test
    reporting before declaring a stable release.
 
 See [docs/CAPACITY_AND_STORE_FORWARD.md](docs/CAPACITY_AND_STORE_FORWARD.md)

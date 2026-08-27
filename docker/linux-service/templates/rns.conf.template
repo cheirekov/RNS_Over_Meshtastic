@@ -26,7 +26,8 @@
     mesh_mode = $RNS_MESH_MODE
     gateway_role = $RNS_GATEWAY_ROLE
     $RNS_GATEWAY_NODE_LINE
-    accept_broadcast_on_hub = No
+    accept_broadcast_on_hub = $RNS_ACCEPT_BROADCAST_ON_HUB
+    max_peers = $RNS_MAX_PEERS
     $RNS_ALLOWED_NODES_LINE
     want_ack = No
     pki_required = No

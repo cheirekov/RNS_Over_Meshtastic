@@ -26,6 +26,8 @@ def test_renders_restricted_gateway_and_bounded_lxmd(tmp_path: Path) -> None:
     lxmd_config = (lxmd / "config").read_text()
     assert "tcp_host = 192.0.2.10" in rns_config
     assert "mesh_mode = gateway_unicast" in rns_config
+    assert "accept_broadcast_on_hub = No" in rns_config
+    assert "max_peers = 32" in rns_config
     assert "allowed_nodes = !a1b3b3b8, !8fd13c64" in rns_config
     assert "network_name = radio-private" in rns_config
     assert "autopeer = no" in lxmd_config
@@ -41,6 +43,32 @@ def test_requires_allowlist_for_unicast_hub() -> None:
     values["RNS_ALLOWED_NODES"] = ""
     with pytest.raises(ValueError, match="RNS_ALLOWED_NODES"):
         configuration_values(values)
+
+
+def test_auto_multi_peer_allows_open_discovery_and_renders_bounded_hub(tmp_path: Path) -> None:
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    values = environment() | {
+        "RNS_MESH_MODE": "auto_multi_peer",
+        "RNS_ALLOWED_NODES": "",
+        "RNS_MAX_PEERS": "12",
+    }
+
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    assert "mesh_mode = auto_multi_peer" in config
+    assert "gateway_role = hub" in config
+    assert "accept_broadcast_on_hub = Yes" in config
+    assert "max_peers = 12" in config
+    assert "allowed_nodes is intentionally empty" in config
+
+
+def test_auto_multi_peer_can_limit_discovery_with_allowlist(tmp_path: Path) -> None:
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    values = environment() | {"RNS_MESH_MODE": "auto_multi_peer"}
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    assert "accept_broadcast_on_hub = Yes" in config
+    assert "allowed_nodes = !a1b3b3b8, !8fd13c64" in config
 
 
 def test_rejects_reused_ifac_credentials() -> None:
@@ -126,4 +154,23 @@ def test_unicast_client_requires_and_renders_gateway_node(tmp_path: Path) -> Non
 def test_broadcast_requires_client_role() -> None:
     values = environment() | {"RNS_MESH_MODE": "broadcast"}
     with pytest.raises(ValueError, match="must be client in broadcast mode"):
+        configuration_values(values)
+
+
+def test_auto_multi_peer_requires_hub_role() -> None:
+    values = environment() | {
+        "RNS_MESH_MODE": "auto_multi_peer",
+        "RNS_GATEWAY_ROLE": "client",
+    }
+    with pytest.raises(ValueError, match="must be hub"):
+        configuration_values(values)
+
+
+@pytest.mark.parametrize("max_peers", ["0", "513"])
+def test_rejects_out_of_range_auto_multi_peer_limit(max_peers: str) -> None:
+    values = environment() | {
+        "RNS_MESH_MODE": "auto_multi_peer",
+        "RNS_MAX_PEERS": max_peers,
+    }
+    with pytest.raises(ValueError, match="RNS_MAX_PEERS must be between 1 and 512"):
         configuration_values(values)

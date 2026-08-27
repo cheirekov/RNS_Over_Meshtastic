@@ -26,7 +26,8 @@ cp examples/linux-service.env.example .env.linux-service
 chmod 600 .env.linux-service
 ```
 
-At minimum set the radio host and hub allowlist:
+At minimum set the radio host. The conservative fixed-peer hub also requires an
+allowlist:
 
 ```dotenv
 MESHTASTIC_TCP_HOST=192.0.2.10
@@ -64,6 +65,31 @@ only as an explicit compatibility test, together with `RNS_GATEWAY_ROLE=client`;
 it does not require an allowlist. A `gateway_unicast` client instead requires
 `RNS_GATEWAY_NODE=!aabbcc11`.
 
+For scalable Android `auto_multi_peer` ingress use:
+
+```dotenv
+RNS_MESH_MODE=auto_multi_peer
+RNS_GATEWAY_ROLE=hub
+RNS_GATEWAY_NODE=
+RNS_ALLOWED_NODES=
+RNS_MAX_PEERS=32
+```
+
+This is a first-class Linux hub mode, not broadcast compatibility mode. An
+Android bridge sends its initial announce or an unknown destination by channel
+broadcast. Linux accepts it, creates one Reticulum child interface for that
+Meshtastic source Node ID, and then replies through that child as a Meshtastic
+unicast DM. Reticulum route learning remains attached to the child interface,
+so many TCP clients and many radio bridges can share the same Linux Transport
+Node without collapsing into one radio path.
+
+An empty `RNS_ALLOWED_NODES` is accepted only in explicit `auto_multi_peer`
+mode and means open radio discovery, bounded by `RNS_MAX_PEERS` (1–512, default
+32). In a private deployment set a comma-separated allowlist; discovery still
+uses broadcast on air, but non-allowlisted source radios are discarded before
+fragment reassembly or peer creation. `gateway_unicast`/`hub` continues to
+require a non-empty allowlist and continues to reject broadcast.
+
 The TCP listener is published on host loopback by default. For a VPN address:
 
 ```dotenv
@@ -82,14 +108,15 @@ docker compose --env-file .env.linux-service -f compose.linux.yaml ps
 docker compose --env-file .env.linux-service -f compose.linux.yaml logs --tail 100 rnsd lxmd
 ```
 
-Run the one-shot status helpers:
+Inspect the running containers directly so status always uses the same image as
+the daemons:
 
 ```bash
-docker compose --env-file .env.linux-service -f compose.linux.yaml \
-  --profile tools run --rm rns-status
+docker compose --env-file .env.linux-service -f compose.linux.yaml exec -T \
+  rnsd rnstatus --config /data/rns --all --totals
 
-docker compose --env-file .env.linux-service -f compose.linux.yaml \
-  --profile tools run --rm lxmd-status
+docker compose --env-file .env.linux-service -f compose.linux.yaml exec -T \
+  lxmd lxmd --config /data/lxmd --rnsconfig /data/rns --status
 ```
 
 Expected RNS status includes the Meshtastic hub, the LAN/VPN TCP server and the
@@ -138,6 +165,29 @@ node, not Meshtastic Node IDs.
    state. A Meshtastic radio ACK is not an LXMF storage or retrieval receipt.
 8. Capture `rns-status`, `lxmd-status` and the daemon logs. Do not start with a
    file or a message burst.
+
+## Android auto-multi-peer ingress acceptance
+
+This validates one Linux TCP client against one Android client attached to a
+Meshtastic radio; a second phone is not involved.
+
+1. Start `rnsd` and `lxmd` with Linux `RNS_MESH_MODE=auto_multi_peer`.
+2. On Android select `auto_multi_peer`, the same logical Meshtastic channel,
+   body 200, interval 2000 ms and the intended MQTT policy. Leave its fixed
+   unicast-peer field unused.
+3. Connect the Android Reticulum client to `127.0.0.1:7822`. Connect the other
+   client directly to the Linux TCP listener, never through the Android bridge.
+4. Announce from Android first. Linux must log `created Reticulum peer interface
+   for !...`; `rnstatus` must show a `MeshtasticPeerInterface` for that radio.
+5. Announce from the TCP client after peer creation. The Android client should
+   receive it through the learned Linux radio peer.
+6. Exchange one numbered short text in each direction and wait for LXMF proofs.
+   Only then test a burst, propagation delivery or a small resource.
+
+If an allowlist is enabled, it contains radio Node IDs such as `!a1b3b3b8`, not
+Reticulum destination hashes. A TCP client announce sent before any radio peer
+has introduced itself cannot be replayed to a nonexistent child interface; send
+or wait for a fresh announce after peer creation.
 
 ## Backup, upgrade and rollback
 

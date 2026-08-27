@@ -591,7 +591,44 @@ assembly или expired frame. Първият packet към още непозн�
 broadcasts` да расте и трафикът да остане broadcast; не очаквайте learned
 unicast routing от скрит RNS header.
 
-### Фаза I — 0.2.0 serialized small-resource test
+### Фаза I — Android auto_multi_peer към Linux hub
+
+Това е архитектурно същият radio-edge сценарий като Android ↔ Android
+`auto_multi_peer`, но единият край е Linux Transport Node с TCP клиенти. В
+теста има само един Android телефон с BLE radio и един клиент, свързан към
+Linux TCP port 4242; втори Android телефон не е необходим.
+
+Linux `.env.linux-service`:
+
+```dotenv
+RNS_MESH_MODE=auto_multi_peer
+RNS_GATEWAY_ROLE=hub
+RNS_GATEWAY_NODE=
+RNS_ALLOWED_NODES=
+RNS_MAX_PEERS=32
+```
+
+Празният allowlist е само discovery baseline. За ограничен тест задайте
+`RNS_ALLOWED_NODES=!a1b3b3b8`. На Android използвайте `auto_multi_peer`; не
+задавайте fixed gateway peer. MQTT policy, IFAC и channel трябва да следват
+конкретния A/B тест и да не се променят по време на една серия.
+
+1. Стартирайте Linux `rnsd` и `lxmd`, после Android bridge-а и двата клиента.
+2. Направете първия announce от Android клиента. Linux трябва да създаде
+   `MeshtasticPeerInterface[!a1b3b3b8 ...]`.
+3. След peer creation направете announce от Linux TCP клиента.
+4. Изпратете `LINUX-A1` от TCP клиента към Android и изчакайте proof.
+5. Изпратете `ANDROID-B1` обратно и изчакайте proof.
+6. Копирайте Android diagnostics, `rnstatus`, `lxmd-status` и daemon logs преди
+   restart.
+
+Приемане: Android първоначалният announce е broadcast; Linux го приема като
+discovery и пази отделен child interface; последващите Linux отговори към този
+peer са Meshtastic DM; двата RNS клиента виждат announcements и LXMF proofs.
+Празен `RNS_ALLOWED_NODES` при стария `gateway_unicast` hub остава невалиден —
+отвореният discovery е разрешен само от изричното `auto_multi_peer`.
+
+### Фаза J — 0.2.0 serialized small-resource test
 
 Използвайте два radio peer-а в една стая, `auto_single_peer`, pure LoRa
 `force_off`, hop `0`, body `200`, interval `2000`, ACK `off` и без паралелен
@@ -610,7 +647,7 @@ fragment (8 KiB ≈ 41 fragments ≈ 82 s), плюс proof/repair и adaptive pa
 
 ### Записан laboratory acceptance — 2026-08-16
 
-Фази H и I са приети за два bridge-а в една стая, pure LoRa, channel 1,
+Фази H и J са приети за два bridge-а в една стая, pure LoRa, channel 1,
 `force_off`, `constrained_auto`, ACK `off` и без IFAC. `auto_multi_peer`
 научи другия radio и в двете посоки: 96/158 active routes, нула conflicts,
 нула unknown fallback и 92/75 learned-unicast TX frames след discovery.

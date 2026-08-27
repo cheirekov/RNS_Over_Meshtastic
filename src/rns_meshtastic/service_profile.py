@@ -95,13 +95,15 @@ def _gateway_node(environment: Mapping[str, str], mesh_mode: str, gateway_role: 
 
 def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
     mesh_mode = _value(environment, "RNS_MESH_MODE", "gateway_unicast")
-    if mesh_mode not in {"broadcast", "gateway_unicast"}:
-        raise ValueError("RNS_MESH_MODE must be broadcast or gateway_unicast")
+    if mesh_mode not in {"broadcast", "gateway_unicast", "auto_multi_peer"}:
+        raise ValueError("RNS_MESH_MODE must be broadcast, gateway_unicast or auto_multi_peer")
     gateway_role = _value(environment, "RNS_GATEWAY_ROLE", "hub")
     if gateway_role not in {"hub", "client"}:
         raise ValueError("RNS_GATEWAY_ROLE must be hub or client")
     if mesh_mode == "broadcast" and gateway_role != "client":
         raise ValueError("RNS_GATEWAY_ROLE must be client in broadcast mode")
+    if mesh_mode == "auto_multi_peer" and gateway_role != "hub":
+        raise ValueError("RNS_GATEWAY_ROLE must be hub in auto_multi_peer mode")
     forwarding = _value(environment, "MESHTASTIC_MQTT_FORWARDING_POLICY", "inherit")
     if forwarding not in {"inherit", "force_off"}:
         raise ValueError("MESHTASTIC_MQTT_FORWARDING_POLICY must be inherit or force_off")
@@ -145,6 +147,8 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
         "RNS_GATEWAY_ROLE": gateway_role,
         "RNS_GATEWAY_NODE_LINE": _gateway_node(environment, mesh_mode, gateway_role),
         "RNS_ALLOWED_NODES_LINE": _node_list(environment, mesh_mode, gateway_role),
+        "RNS_ACCEPT_BROADCAST_ON_HUB": "Yes" if mesh_mode == "auto_multi_peer" else "No",
+        "RNS_MAX_PEERS": str(_integer(environment, "RNS_MAX_PEERS", 32, 1, 512)),
         "RNS_RADIO_IFAC_BLOCK": radio_ifac,
         "RNS_TCP_IFAC_BLOCK": tcp_ifac,
         "RNS_TCP_LISTEN_PORT": str(
