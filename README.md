@@ -49,7 +49,7 @@ The Linux/NixOS implementation provides:
 - an optional Docker service profile with separate `rnsd` and `lxmd` processes,
   persistent identities/message storage and no host-side Python installation.
 
-Android bridge 0.2.1 provides:
+Android bridge 0.2.2 provides:
 
 - a direct BLE or TCP PhoneAPI connection without depending on the official
   Meshtastic Android app;
@@ -130,6 +130,13 @@ broadcast. It also hardens the Linux native PhoneAPI backend: a lost TCP/serial/
 BLE session is replaced completely with bounded reconnect backoff, queued
 frames wait for the replacement transport, and dynamic radio-peer interfaces
 track the physical parent state instead of remaining falsely `Up`.
+
+Version 0.2.2 corrects PhoneAPI transmit-queue diagnostics. Firmware
+`QueueStatus.res` uses the firmware `ERRNO` namespace, not the protobuf
+`Routing.Error` enum: result 35 is the successful `ERRNO_SHOULD_RELEASE`, not
+`PKI_UNKNOWN_PUBKEY`. The bridge now counts only genuine queue rejection
+results as device rejects and reports the last queue result separately. Actual
+Meshtastic routing NAKs remain visible and authoritative in the radio-ACK line.
 
 The `10 Mbps` value that a Reticulum client displays belongs to the standard
 local TCP interface and is not an estimate of LoRa throughput. It is not purely

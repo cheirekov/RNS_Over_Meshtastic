@@ -547,6 +547,12 @@ Pixel session-ът има `radio up/down 3/2`; понеже няма drop/reasse
 физическия parent. Следващият acceptance тест трябва да докаже едновременно
 ненулев learned-unicast counter и автоматично възстановяване след прекъсване.
 
+Последващият 0.2.1 field report показа `QueueStatus.res=35`, който bridge-ът
+погрешно е именувал като `PKI_UNKNOWN_PUBKEY`. Това не е routing NAK:
+PhoneAPI queue status използва firmware ERRNO namespace, където 35 е успешният
+`ERRNO_SHOULD_RELEASE`. 0.2.2 разделя двата namespace-а, не брои 35 като reject
+и оставя истинските routing errors в отделната ACK/NAK телеметрия.
+
 ## Приоритет 3 — optional Linux service profile
 
 Linux остава незадължителен за директна Android връзка, но може да комбинира

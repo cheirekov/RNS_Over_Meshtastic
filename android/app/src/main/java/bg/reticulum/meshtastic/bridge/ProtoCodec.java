@@ -130,6 +130,27 @@ final class ProtoCodec {
         };
     }
 
+    /**
+     * QueueStatus.res uses the firmware ErrorCode/ERRNO namespace, not the
+     * Routing.Error enum. In particular, 35 is the successful
+     * ERRNO_SHOULD_RELEASE result, not Routing.Error.PKI_UNKNOWN_PUBKEY.
+     */
+    static boolean queueStatusSucceeded(int result) {
+        return result == 0 || result == 35;
+    }
+
+    static String queueStatusResultName(int result) {
+        return switch (result) {
+            case 0 -> "NONE";
+            // Firmware 2.7.26 aliases these ERRNO values with Routing.Error.
+            case 32 -> "BAD_REQUEST_OR_ERRNO_UNKNOWN";
+            case 33 -> "NOT_AUTHORIZED_OR_ERRNO_NO_INTERFACES";
+            case 34 -> "PKI_FAILED_OR_ERRNO_DISABLED";
+            case 35 -> "ERRNO_SHOULD_RELEASE";
+            default -> routingErrorName(result);
+        };
+    }
+
     static byte[] toRadioPacket(
             long source,
             long destination,

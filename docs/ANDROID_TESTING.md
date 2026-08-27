@@ -670,6 +670,12 @@ fragment (8 KiB ≈ 41 fragments ≈ 82 s), плюс proof/repair и adaptive pa
 без останали missing assemblies. Broadcast остава допустим за announce,
 unknown, истински PLAIN/GROUP и opaque IFAC кадри.
 
+При Android 0.2.2+ редът `queue result: ERRNO_SHOULD_RELEASE (35) accepted` е
+нормално успешно firmware събитие. Той не означава неизвестен PKI ключ и не
+трябва да увеличава `rejects`. Истинският Meshtastic routing NAK се показва в
+`radio ACK` с конкретната routing причина; локален queue reject се показва в
+`device TX queue` като `rejected`.
+
 ### Записан laboratory acceptance — 2026-08-16
 
 Фази H и J са приети за два bridge-а в една стая, pure LoRa, channel 1,

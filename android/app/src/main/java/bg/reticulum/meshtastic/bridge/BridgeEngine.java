@@ -65,6 +65,7 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
     private volatile int deviceQueueMax;
     private volatile int deviceQueueMinFree = Integer.MAX_VALUE;
     private volatile String lastDeviceReject = "none";
+    private volatile String lastDeviceQueueResult = "none";
     private volatile String lastRxState = "none";
     private volatile String lastRouteDecision = "none";
     private volatile String lastOversizedFrame = "none";
@@ -311,14 +312,17 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
             deviceQueueMax = Math.max(deviceQueueMax, max);
             deviceQueueMinFree = Math.min(deviceQueueMinFree, free);
         }
-        if (result != 0) {
-            lastDeviceReject = routingErrorName(result) + " (" + result + ")";
+        lastDeviceQueueResult = queueStatusResultName(result) + " (" + result + ")"
+                + (queueStatusSucceeded(result) ? " accepted" : " rejected");
+        if (!queueStatusSucceeded(result)) {
+            lastDeviceReject = queueStatusResultName(result) + " (" + result + ")";
             deviceRejects.incrementAndGet();
             lastError = "Meshtastic device rejected TX: " + lastDeviceReject;
         }
         deviceQueueState = "device TX queue: " + free + "/" + max + " free"
                 + "; peak used: " + deviceQueuePeakUsed() + "/" + deviceQueueMax
-                + "; rejects: " + deviceRejects.get() + ", last: " + lastDeviceReject;
+                + "; rejects: " + deviceRejects.get() + ", last: " + lastDeviceReject
+                + "; queue result: " + lastDeviceQueueResult;
         publish();
     }
 
@@ -603,6 +607,14 @@ final class BridgeEngine implements AutoCloseable, RadioTransport.Listener, Reti
             case 39 -> "PKI_SEND_FAIL_PUBLIC_KEY";
             default -> "UNKNOWN";
         };
+    }
+
+    static boolean queueStatusSucceeded(int result) {
+        return ProtoCodec.queueStatusSucceeded(result);
+    }
+
+    static String queueStatusResultName(int result) {
+        return ProtoCodec.queueStatusResultName(result);
     }
 
     private static boolean startsWith(byte[] value, byte[] prefix) {

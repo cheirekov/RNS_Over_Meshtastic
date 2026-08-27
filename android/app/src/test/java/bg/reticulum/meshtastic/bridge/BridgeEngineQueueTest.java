@@ -25,6 +25,16 @@ public class BridgeEngineQueueTest {
         assertEquals("UNKNOWN", BridgeEngine.routingErrorName(999));
     }
 
+    @Test public void queueStatusUsesFirmwareErrnoNamespace() {
+        assertTrue(BridgeEngine.queueStatusSucceeded(0));
+        assertTrue(BridgeEngine.queueStatusSucceeded(35));
+        assertFalse(BridgeEngine.queueStatusSucceeded(32));
+        assertEquals("ERRNO_SHOULD_RELEASE", BridgeEngine.queueStatusResultName(35));
+        assertEquals("BAD_REQUEST_OR_ERRNO_UNKNOWN", BridgeEngine.queueStatusResultName(32));
+        assertEquals("DUTY_CYCLE_LIMIT", BridgeEngine.queueStatusResultName(9));
+        assertEquals("RATE_LIMIT_EXCEEDED", BridgeEngine.queueStatusResultName(38));
+    }
+
     @Test public void distinguishesMqttOriginFromFinalLoraArrival() {
         ProtoCodec.RadioPacket relayed = packet(true, 1);
         ProtoCodec.RadioPacket directMqtt = packet(true, 5);
