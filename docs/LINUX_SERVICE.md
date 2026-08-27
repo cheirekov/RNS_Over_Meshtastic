@@ -120,6 +120,19 @@ the Meshtastic and private LAN/VPN interfaces `internal`; each outbound
 rebroadcast over LoRa, and radio/LAN announces are not automatically exported.
 A private client can still request a specific outside path on demand.
 
+To make public announces visible only to trusted LAN/VPN clients, opt in with:
+
+```dotenv
+RNS_LAN_PUBLIC_VISIBILITY=yes
+```
+
+This keeps the Meshtastic radio `internal`, changes only the LAN/VPN listener to
+`gateway`, and leaves every public uplink as `boundary`. Public announces can
+then reach LAN clients without being forwarded to LoRa. This is deliberately
+bidirectional visibility: announces originating from a LAN client may be sent
+to the public boundary and to already learned Meshtastic peers. Keep the
+listener private and use `no` when LAN identities must remain private.
+
 Add at most eight explicitly permitted `host:port` endpoints, one at a time.
 IPv6 literals use `[address]:port`. URLs, credentials, comments, duplicates,
 invalid hosts and invalid ports are rejected before `rnsd` starts. The private

@@ -92,6 +92,31 @@ def test_public_upstreams_render_as_boundaries_and_make_private_interfaces_inter
     assert config.count("announces_from_internal = No") == 2
 
 
+def test_lan_public_visibility_keeps_radio_internal_and_makes_lan_gateway(
+    tmp_path: Path,
+) -> None:
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    values = environment() | {
+        "RNS_PUBLIC_UPSTREAMS": "193.193.182.147:4242",
+        "RNS_LAN_PUBLIC_VISIBILITY": "yes",
+    }
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    radio, remainder = config.split("  [[LAN VPN Reticulum clients]]", maxsplit=1)
+    lan, public = remainder.split("  [[Public boundary 1]]", maxsplit=1)
+    assert "mode = internal" in radio
+    assert "mode = gateway" in lan
+    assert "mode = boundary" in public
+    assert "announces_from_internal = No" in public
+
+
+@pytest.mark.parametrize("visibility", ["true", "1", "enabled", "maybe"])
+def test_rejects_invalid_lan_public_visibility(visibility: str) -> None:
+    values = environment() | {"RNS_LAN_PUBLIC_VISIBILITY": visibility}
+    with pytest.raises(ValueError, match="RNS_LAN_PUBLIC_VISIBILITY must be yes or no"):
+        configuration_values(values)
+
+
 @pytest.mark.parametrize(
     "upstreams",
     [

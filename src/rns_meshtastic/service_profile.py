@@ -187,6 +187,10 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
         raise ValueError("MESHTASTIC_MQTT_FORWARDING_POLICY must be inherit or force_off")
 
     private_interface_mode, public_upstream_block = _public_upstream_configuration(environment)
+    lan_public_visibility = _yes_no(environment, "RNS_LAN_PUBLIC_VISIBILITY", "no")
+    lan_interface_mode = (
+        "gateway" if lan_public_visibility == "yes" else private_interface_mode
+    )
 
     radio_name, radio_passphrase, radio_ifac = _ifac_configuration(
         environment, "RNS_RADIO_IFAC", "radio"
@@ -229,7 +233,8 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
         "RNS_ALLOWED_NODES_LINE": _node_list(environment, mesh_mode, gateway_role),
         "RNS_ACCEPT_BROADCAST_ON_HUB": "Yes" if mesh_mode == "auto_multi_peer" else "No",
         "RNS_MAX_PEERS": str(_integer(environment, "RNS_MAX_PEERS", 32, 1, 512)),
-        "RNS_PRIVATE_INTERFACE_MODE": private_interface_mode,
+        "RNS_RADIO_INTERFACE_MODE": private_interface_mode,
+        "RNS_LAN_INTERFACE_MODE": lan_interface_mode,
         "RNS_PUBLIC_UPSTREAM_BLOCK": public_upstream_block,
         "RNS_RADIO_IFAC_BLOCK": radio_ifac,
         "RNS_TCP_IFAC_BLOCK": tcp_ifac,

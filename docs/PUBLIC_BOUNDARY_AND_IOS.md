@@ -33,6 +33,13 @@ The intended interface policy is:
 | Outbound public uplink | `boundary` | `announces_from_internal = no` | Public announces do not flood the internal LoRa segment, and private announces received on internal interfaces do not propagate to the public uplink. |
 | Local shared instance | local | filesystem/process permissions | Lets `lxmd` use the same Transport without a network listener. |
 
+`RNS_LAN_PUBLIC_VISIBILITY=yes` is the explicit exception for operators who want
+public discovery on trusted LAN/VPN clients. It changes only the LAN listener to
+`gateway`; the radio remains `internal` and the public uplink remains
+`boundary`. Public announces can therefore reach the LAN without entering LoRa.
+LAN-origin announces can also reach the public boundary and learned LoRa peers,
+so this setting is visibility in both directions, not a read-only subscription.
+
 This is the Reticulum-native solution for a LoRa network connected to a much
 faster public network. `internal` interfaces can resolve a specific destination
 across a `boundary` with a path request, even though public announces are not
@@ -76,6 +83,9 @@ The renderer produces the following policy from `RNS_PUBLIC_UPSTREAMS`:
   target_port = 4242
   announces_from_internal = no
 ```
+
+With `RNS_LAN_PUBLIC_VISIBILITY=yes`, only the private LAN/VPN block above uses
+`mode = gateway`; the other two modes remain unchanged.
 
 The endpoint list is disabled by default, bounded to eight entries and validated
 before daemon startup. The first accepted deployment endpoint is configured as

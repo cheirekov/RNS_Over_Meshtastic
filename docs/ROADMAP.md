@@ -647,6 +647,10 @@ expiry allowlist. Пълната схема и acceptance gates са в
 `announces_from_internal = no`. Добавени са persistent baseline/delta counters
 за LoRa, public boundary и private TCP без double-count на dynamic radio peers.
 Полевият negative-flood acceptance започва с един разрешен сървър.
+Опционалното `RNS_LAN_PUBLIC_VISIBILITY=yes` прави само LAN/VPN listener-а
+`gateway`: public announce-ите стават видими на доверени LAN клиенти, без да се
+изпращат към `internal` Meshtastic radio. Това също разрешава LAN-origin
+announce-и към public boundary и learned LoRa peers и затова не е default.
 
 ## Приоритет 4 — iOS interface, не отделен background bridge
 
