@@ -17,10 +17,11 @@ bridge transport или Reticulum cryptography в клиента. Постоян
 
 ## Columba — първи pilot
 
-Минималният upstream patch съдържа preset, loopback capability probe,
-constrained badge и resource/PTT warning. Няма нужда от Meshtastic SDK или GPL
-bridge source в Columba. Acceptance: messages работят при API available и при
-стар bridge без API.
+Непосредственият upstream-safe patch е companion preset, loopback capability
+probe, constrained badge и resource/PTT warning. Директният in-process
+Meshtastic interface има decision-complete технически дизайн, но е блокиран от
+изрично повдигнатата MPL/GPL граница, докато maintainer-ите не одобрят лицензен
+или clean-room път. Виж [COLUMBA_DIRECT_INTERFACE.md](COLUMBA_DIRECT_INTERFACE.md).
 
 ## CrossTalk
 

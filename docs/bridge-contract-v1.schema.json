@@ -5,12 +5,14 @@
   "$defs": {
     "trafficCounter": {
       "type": "object",
-      "required": ["rx_bytes", "tx_bytes", "rx_bps", "tx_bps"],
+      "required": ["rx_bytes", "tx_bytes", "rx_bps", "tx_bps", "available", "source"],
       "properties": {
         "rx_bytes": {"type": "integer", "minimum": 0},
         "tx_bytes": {"type": "integer", "minimum": 0},
         "rx_bps": {"type": "number", "minimum": 0},
-        "tx_bps": {"type": "number", "minimum": 0}
+        "tx_bps": {"type": "number", "minimum": 0},
+        "available": {"type": "boolean"},
+        "source": {"type": "string", "minLength": 1}
       },
       "additionalProperties": true
     },

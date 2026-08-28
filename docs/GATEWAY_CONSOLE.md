@@ -27,22 +27,68 @@ curl --fail http://127.0.0.1:8787/healthz
 ssh -L 8787:127.0.0.1:8787 gateway-host
 ```
 
-Отворете `http://127.0.0.1:8787/`. UI показва отделно LoRa, LAN и public TCP
-traffic, radio queue, Meshtastic peers, upstream status и LXMD propagation
-hash. LXMD store usage е отделна метрика; Console не представя store bytes като
-доказан propagation network traffic.
+Отворете `http://127.0.0.1:8787/`. UI показва отделно LoRa, LAN, public TCP и
+LXMD propagation traffic, текущи скорости, общ radio queue pressure,
+Meshtastic peers, LAN client count, upstream status и LXMD propagation hash.
+Стойностите се форматират като B/KiB/MiB/GiB; tooltip, JSON API и Prometheus
+запазват точните bytes. Ако LXMD не предоставя peer counters, UI показва
+`not available`, а не подвеждащо `0 B`.
 
 ## Read-only API и metrics
 
 - `GET /api/v1/capabilities`
 - `GET /api/v1/status`
 - `GET /api/v1/config` — само allowlisted полета; secrets са redacted
+- `GET /api/v1/config/schema` — всички управлявани полета, типове, defaults,
+  граници, препоръчителни стойности и contextual help
+- `GET /api/v1/events?after=CURSOR&limit=100` — ограничен structured journal
 - `GET /api/v1/lxmd/qr`
+- `POST /api/v1/lxmd/announce` — operator-triggered propagation announce
 - `GET /metrics`
 - `GET /healthz`
 
 HTTP отговорите не съдържат IFAC passphrases. Request body никога не се пише в
-HTTP log. Prometheus endpoint-ът съдържа само counters и queue occupancy.
+HTTP log. Prometheus endpoint-ът съдържа само counters, availability и queue
+occupancy. Mutating endpoint-ите приемат само JSON, проверяват browser origin и
+имат 64-KiB body limit. Console няма apply/restart права.
+
+## Manual LXMD announce
+
+`lxmd` се стартира през project-managed launcher, който използва официалния
+LXMF router. Launcher-ът излага само `status` и `announce` през Unix socket с
+mode `0600`; няма shell command, Docker socket или network control API.
+
+Бутонът **Announce propagation node** показва confirmation, понеже announce-ът
+умишлено консумира LoRa airtime. Cooldown-ът е 15 минути по подразбиране:
+
+```dotenv
+LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS=900
+```
+
+Минимумът е 300 секунди. Cooldown state се пази в LXMD volume, така че restart
+не го заобикаля. Успешният отговор съдържа `announced_at` и
+`next_allowed_at`; прекалено ранна заявка връща HTTP 429 и не announce-ва.
+
+## Configuration schema и secrets
+
+Формата се генерира от schema endpoint-а и има Basic/Advanced изглед за Radio,
+Reticulum, LoRa safety, Public upstreams, Discovery, IFAC, LAN/Console и LXMD.
+Secret полетата показват само `Configured`/`Not configured`; browser-ът не може
+да ги променя. При staging текущите secret стойности се запазват от защитената
+process environment, независимо че не присъстват в browser payload.
+
+## Events и alerts
+
+Console пази най-много 512 structured събития и 512 KiB. UI polling-ът е на пет
+секунди. Journal-ът съдържа само operational metadata за radio reconnect,
+peer/upstream transition, TX rejection, repair expiry, LXMD announce и config
+stage — никога RNS/LXMF payload, password или IFAC passphrase.
+
+Alerts са текущи или delta-базирани: stale/missing telemetry, reconnect churn,
+TX rejection/send failure, repair expiry/capping, stalled reassembly, upstream
+down/flapping, LXMD unavailable/storage pressure и collector failure. Исторически
+cumulative counter сам по себе си не оставя alert активен. Нормалното състояние
+се показва като зелено `No active alerts`.
 
 ## Validate, stage, apply и rollback
 

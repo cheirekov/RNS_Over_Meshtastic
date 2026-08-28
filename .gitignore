@@ -9,5 +9,8 @@ dist/
 var/
 .devbox/
 android/.gradle/
+android/release-artifacts/
+*.jks
+*.keystore
 .env.linux-service
 examples/*/storage/

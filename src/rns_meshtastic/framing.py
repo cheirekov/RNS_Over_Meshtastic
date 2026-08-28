@@ -92,6 +92,7 @@ class FragmentProtocol:
         self._repair_request_times: deque[float] = deque()
         self.repair_requests = 0
         self.repair_throttled = 0
+        self.assemblies_expired = 0
         self._lock = threading.RLock()
 
     def encode(self, frame: bytes, destination: str) -> list[Transmission]:
@@ -162,6 +163,13 @@ class FragmentProtocol:
                 "repair_throttled": self.repair_throttled,
                 "repair_budget_used": len(self._repair_request_times),
                 "repair_budget_limit": self.max_repair_requests_per_window,
+                "assemblies_expired": self.assemblies_expired,
+                "capped_repairs": sum(
+                    1
+                    for assembly in self._assemblies.values()
+                    for attempts in assembly.request_attempts.values()
+                    if attempts >= self.max_repair_attempts
+                ),
             }
 
     def poll_repairs(self, max_requests: int = 1, *, allow_control: bool = True) -> ReceiveResult:
@@ -207,9 +215,7 @@ class FragmentProtocol:
             transmissions=[Transmission(source, cached.fragments[requested], reason="retransmit")]
         )
 
-    def _handle_fragment_locked(
-        self, source: str, payload: bytes, *, allow_control: bool
-    ) -> ReceiveResult:
+    def _handle_fragment_locked(self, source: str, payload: bytes, *, allow_control: bool) -> ReceiveResult:
         index, wire_position = self._parse_header(payload)
         position = abs(wire_position)
         if len(payload) == HEADER.size:
@@ -241,9 +247,7 @@ class FragmentProtocol:
         missing = [p for p in range(1, assembly.final_position + 1) if p not in assembly.fragments]
         if missing:
             if allow_control:
-                self._append_repair_requests_locked(
-                    result, source, index, assembly, missing, now, 1, True
-                )
+                self._append_repair_requests_locked(result, source, index, assembly, missing, now, 1, True)
             return result
 
         frame = b"".join(assembly.fragments[p] for p in range(1, assembly.final_position + 1))
@@ -311,6 +315,7 @@ class FragmentProtocol:
         for key, assembly in list(self._assemblies.items()):
             if assembly.updated_at < cutoff:
                 self._assemblies.pop(key, None)
+                self.assemblies_expired += 1
         for key, cached in list(self._tx_cache.items()):
             if cached.created_at < cutoff:
                 self._tx_cache.pop(key, None)

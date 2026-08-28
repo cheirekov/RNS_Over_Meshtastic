@@ -1,4 +1,20 @@
-# Roadmap след 0.3.0
+# Roadmap след 0.4.0
+
+## Завършено в 0.4.0
+
+- Gateway Console с human-readable traffic/rates, точни API/Prometheus bytes,
+  реални или изрично unavailable LXMD counters и LAN/queue visibility.
+- Schema-driven Basic/Advanced configuration за всички managed variables;
+  secret-preserving staging и contextual help.
+- Bounded structured event journal, delta/current alerts и manual LXMD announce
+  през тесен Unix control socket с persistent cooldown.
+- Android `versionCode 28`; release task без production signing identity вече
+  прекъсва, а Docker workflow build-ва, проверява и архивира подписания APK.
+- Decision-complete Columba direct-interface specification с TCP/BLE етапи,
+  interoperability gates и изрично MPL/GPL/maintainer решение преди код.
+
+Transport framing, `auto_multi_peer`, scheduler и repair алгоритмите не са
+променени в този milestone.
 
 ## Завършено в 0.3.0
 
@@ -29,24 +45,26 @@
 5. Двупосочни numbered short LXMF серии, после едно малко image и кратко PTT в
    лабораторна RF среда.
 6. Съпоставка на Android diagnostics, Console и `traffic-report`.
-7. Подписан release APK, clean upgrade от 0.2.2 и документиран rollback.
+7. Подписан release APK, clean install, upgrade със същия ключ и документиран rollback.
 
 Field profile със слаб/асиметричен Meshtastic path измерва загубата, но не
 изисква 100% delivery и не се използва за хаотично transport tuning.
 
 ## Следващи milestones
 
-### 0.3.x — hardening
+### 0.4.x — acceptance и hardening
 
 - 24-hour Linux/Android soak и bounded telemetry retention.
 - Реални latency/reconnect/route-change samples за public upstream-и.
+- Production-key signed APK clean-install/upgrade evidence.
 - Първи Columba companion patch и interoperability report.
-- Миграционни tests за Android SharedPreferences и signed release pipeline.
+- MPL/GPL решение с Columba maintainer преди direct-interface код.
+- Миграционни tests за Android SharedPreferences.
 
 Transport алгоритмите не се променят без диагностика, която доказва конкретен
 failure mode.
 
-### 0.4 — ecosystem integration
+### 0.5 — ecosystem integration
 
 - Columba upstream proposal.
 - CrossTalk preset/status adapter.

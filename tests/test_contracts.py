@@ -24,7 +24,10 @@ def test_contracts_are_explicitly_versioned_and_json_ready():
 
 
 def test_traffic_counter_defaults_are_zero():
-    assert to_dict(TrafficCounterV1())["tx_bytes"] == 0
+    value = to_dict(TrafficCounterV1())
+    assert value["tx_bytes"] == 0
+    assert value["available"] is True
+    assert value["source"] == "reticulum"
 
 
 def test_invalid_alert_severity_is_rejected():

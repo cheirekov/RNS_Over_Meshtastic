@@ -67,6 +67,7 @@ MANAGED_FIELDS = (
     "LXMD_NODE_NAME",
     "LXMD_DISPLAY_NAME",
     "LXMD_ANNOUNCE_INTERVAL",
+    "LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS",
     "LXMD_AUTOPEER",
     "LXMD_FROM_STATIC_ONLY",
     "LXMD_STORAGE_LIMIT_MB",
@@ -91,8 +92,7 @@ def is_secret(name: str) -> bool:
 
 def redact_environment(environment: Mapping[str, str]) -> dict[str, str]:
     return {
-        name: "<configured>" if is_secret(name) and value else value
-        for name, value in environment.items()
+        name: "<configured>" if is_secret(name) and value else value for name, value in environment.items()
     }
 
 
@@ -140,9 +140,7 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
     if discovery not in DISCOVERY_MODES:
         raise ValueError("RNS_PUBLIC_DISCOVERY must be off, manual or trusted_auto")
     sources = [
-        item.strip().lower()
-        for item in values.get("RNS_DISCOVERY_SOURCES", "").split(",")
-        if item.strip()
+        item.strip().lower() for item in values.get("RNS_DISCOVERY_SOURCES", "").split(",") if item.strip()
     ]
     if any(re.fullmatch(r"[0-9a-f]{32}", item) is None for item in sources):
         raise ValueError("RNS_DISCOVERY_SOURCES must contain 32-character identity hashes")
@@ -150,6 +148,14 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
         raise ValueError("trusted_auto discovery requires RNS_DISCOVERY_SOURCES")
     values["RNS_PUBLIC_DISCOVERY"] = discovery
     values["RNS_DISCOVERY_SOURCES"] = ",".join(sources)
+
+    try:
+        manual_announce_cooldown = int(values.get("LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS", "900"))
+    except ValueError as error:
+        raise ValueError("LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS must be an integer") from error
+    if not 300 <= manual_announce_cooldown <= 86400:
+        raise ValueError("LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS must be between 300 and 86400")
+    values["LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS"] = str(manual_announce_cooldown)
 
     if values.get("MESHTASTIC_OVERRIDE_DUTY_CYCLE", "no").lower() not in {"", "no", "false", "0"}:
         raise ValueError("Meshtastic duty-cycle override is forbidden by the gateway safety policy")
@@ -195,9 +201,7 @@ def apply_staged_environment(
 
     validated = validate_gateway_environment(parse_env_file(staged))
     target.parent.mkdir(parents=True, exist_ok=True)
-    backup = target.with_name(
-        target.name + ".backup-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    )
+    backup = target.with_name(target.name + ".backup-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"))
     if target.exists():
         shutil.copy2(target, backup)
     else:
@@ -213,8 +217,20 @@ def apply_staged_environment(
 
     def compose_up() -> None:
         result = subprocess.run(
-            ["docker", "compose", "--env-file", str(target), "-f", str(compose_file),
-             "up", "-d", "--build", "rnsd", "lxmd", "gateway-console"],
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                str(target),
+                "-f",
+                str(compose_file),
+                "up",
+                "-d",
+                "--build",
+                "rnsd",
+                "lxmd",
+                "gateway-console",
+            ],
             check=False,
             text=True,
         )

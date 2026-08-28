@@ -43,6 +43,8 @@ class TrafficCounterV1:
     tx_bytes: int = 0
     rx_bps: float = 0.0
     tx_bps: float = 0.0
+    available: bool = True
+    source: str = "reticulum"
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,4 +95,3 @@ def to_dict(value: Any) -> dict[str, Any]:
     """Return a JSON-ready contract with an explicit schema version."""
 
     return {"schema": CONTRACT_VERSION, **asdict(value)}
-

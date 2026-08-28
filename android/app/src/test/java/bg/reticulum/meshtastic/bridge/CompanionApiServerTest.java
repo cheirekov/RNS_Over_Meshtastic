@@ -34,6 +34,8 @@ public class CompanionApiServerTest {
         assertTrue(value.contains("\"queue_fragments\":3"));
         assertTrue(value.contains("\"queue_byte_limit\":808"));
         assertTrue(value.contains("\"lora\":{\"rx_bytes\":90,\"tx_bytes\":120"));
+        assertTrue(value.contains("\"available\":true,\"source\":\"android diagnostics\""));
+        assertTrue(value.contains("\"public\":{\"rx_bytes\":0,\"tx_bytes\":0,\"rx_bps\":0.0,\"tx_bps\":0.0,\"available\":false"));
     }
 
     @Test public void statusContainsNoRadioCredentials() {

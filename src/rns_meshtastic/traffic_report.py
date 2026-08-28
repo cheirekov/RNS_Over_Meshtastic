@@ -77,6 +77,7 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
     public: dict[str, dict[str, int | float | bool]] = {}
     public_total = TrafficCounter()
     private_total = TrafficCounter()
+    private_client_count = 0
     for item in interfaces:
         short_name = str(item.get("short_name") or "")
         if short_name.startswith(PUBLIC_NAME_PREFIX):
@@ -85,6 +86,8 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
             public[short_name] = counter.as_dict() | {"up": bool(item.get("status"))}
         elif short_name == PRIVATE_TCP_NAME and not item.get("parent_interface_name"):
             private_total = private_total.add(_counter(item))
+        elif item.get("parent_interface_name") == PRIVATE_TCP_NAME:
+            private_client_count += 1
 
     return {
         "schema": SCHEMA_VERSION,
@@ -97,6 +100,7 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
         "public_interfaces": public,
         "radio_parent_count": len(radio_parents),
         "radio_peer_count": len(radio_peers),
+        "private_tcp_client_count": private_client_count,
     }
 
 
@@ -182,8 +186,7 @@ def _format_counter(
             suffix = f"; window +{_human_bytes(delta)} ({average:.1f} bps average)"
         lines.append(f"  {direction}: {_human_bytes(total)} cumulative{suffix}")
     lines.append(
-        f"  now: ↓{float(current.get('rxs', 0) or 0):.1f} bps "
-        f"↑{float(current.get('txs', 0) or 0):.1f} bps"
+        f"  now: ↓{float(current.get('rxs', 0) or 0):.1f} bps ↑{float(current.get('txs', 0) or 0):.1f} bps"
     )
     return lines
 
@@ -192,8 +195,7 @@ def format_report(current: Mapping[str, Any], baseline: Mapping[str, Any] | None
     comparable = bool(
         baseline
         and baseline.get("transport_id") == current.get("transport_id")
-        and float(baseline.get("transport_uptime", 0) or 0)
-        <= float(current.get("transport_uptime", 0) or 0)
+        and float(baseline.get("transport_uptime", 0) or 0) <= float(current.get("transport_uptime", 0) or 0)
     )
     elapsed = _elapsed_seconds(current, baseline) if comparable and baseline else None
     lines = [

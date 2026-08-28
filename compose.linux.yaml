@@ -29,6 +29,7 @@ x-linux-environment: &linux-environment
   LXMD_NODE_NAME: ${LXMD_NODE_NAME:-RNS Meshtastic Propagation}
   LXMD_DISPLAY_NAME: ${LXMD_DISPLAY_NAME:-RNS Meshtastic Service}
   LXMD_ANNOUNCE_INTERVAL: ${LXMD_ANNOUNCE_INTERVAL:-360}
+  LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS: ${LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS:-900}
   LXMD_AUTOPEER: ${LXMD_AUTOPEER:-no}
   LXMD_FROM_STATIC_ONLY: ${LXMD_FROM_STATIC_ONLY:-yes}
   LXMD_STORAGE_LIMIT_MB: ${LXMD_STORAGE_LIMIT_MB:-64}
@@ -79,7 +80,15 @@ services:
 
   lxmd:
     <<: *linux-service
-    command: ["lxmd", "--config", "/data/lxmd", "--rnsconfig", "/data/rns", "--propagation-node", "--verbose"]
+    command:
+      - rns-meshtastic
+      - lxmd-managed
+      - --config-dir
+      - /data/lxmd
+      - --rns-config-dir
+      - /data/rns
+      - --cooldown-seconds
+      - ${LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS:-900}
     network_mode: service:rnsd
     depends_on:
       rnsd:

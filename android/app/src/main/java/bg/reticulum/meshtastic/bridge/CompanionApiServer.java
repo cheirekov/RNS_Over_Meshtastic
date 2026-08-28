@@ -148,10 +148,10 @@ final class CompanionApiServer implements AutoCloseable {
         long[] queue = matches(QUEUE, status, 5);
         long[] bytes = matches(FRAME_BYTES, status, 2);
         return "{\"schema\":1,\"captured_at\":" + quote(Instant.now().toString())
-                + ",\"lora\":" + counterJson(bytes[1], bytes[0])
-                + ",\"lan\":" + counterJson(bytes[0], bytes[1])
-                + ",\"public\":" + counterJson(0, 0)
-                + ",\"propagation\":" + counterJson(0, 0)
+                + ",\"lora\":" + counterJson(bytes[1], bytes[0], true, "android diagnostics")
+                + ",\"lan\":" + counterJson(bytes[0], bytes[1], true, "android diagnostics")
+                + ",\"public\":" + counterJson(0, 0, false, "not measured")
+                + ",\"propagation\":" + counterJson(0, 0, false, "not measured")
                 + ",\"tx_rns_frames\":" + tx[0] + ",\"tx_meshtastic_fragments\":" + tx[1]
                 + ",\"rx_rns_frames\":" + rx[0] + ",\"rx_meshtastic_fragments\":" + rx[1]
                 + ",\"queue_frames\":" + queue[0] + ",\"queue_fragments\":" + queue[1]
@@ -185,9 +185,10 @@ final class CompanionApiServer implements AutoCloseable {
         return peers.append(']').toString();
     }
 
-    private static String counterJson(long rxBytes, long txBytes) {
+    private static String counterJson(long rxBytes, long txBytes, boolean available, String source) {
         return "{\"rx_bytes\":" + rxBytes + ",\"tx_bytes\":" + txBytes
-                + ",\"rx_bps\":0.0,\"tx_bps\":0.0}";
+                + ",\"rx_bps\":0.0,\"tx_bps\":0.0,\"available\":" + available
+                + ",\"source\":" + quote(source) + "}";
     }
 
     private static long[] matches(Pattern pattern, String input, int count) {

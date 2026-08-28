@@ -32,6 +32,12 @@ def test_conservative_profile_applies_bounded_defaults():
     assert result.values["RNS_RADIO_TX_INTERVAL"] == "2.0"
     assert result.values["RNS_RADIO_QUEUE_FRAGMENTS"] == "32"
     assert result.values["RNS_REPAIR_REQUEST_BUDGET"] == "12"
+    assert result.values["LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS"] == "900"
+
+
+def test_manual_announce_cooldown_has_a_hard_minimum():
+    with pytest.raises(ValueError, match="between 300 and 86400"):
+        validate_gateway_environment(environment() | {"LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS": "299"})
 
 
 def test_trusted_discovery_requires_allowlisted_identity():
@@ -50,9 +56,7 @@ def test_trusted_discovery_requires_allowlisted_identity():
 
 def test_duty_cycle_override_is_always_rejected():
     with pytest.raises(ValueError, match="duty-cycle override"):
-        validate_gateway_environment(
-            environment() | {"MESHTASTIC_OVERRIDE_DUTY_CYCLE": "yes"}
-        )
+        validate_gateway_environment(environment() | {"MESHTASTIC_OVERRIDE_DUTY_CYCLE": "yes"})
 
 
 def test_secrets_are_redacted_but_staged_file_is_private(tmp_path: Path):
@@ -101,14 +105,11 @@ class _HealthyResponse:
 def test_explicit_apply_creates_backup_and_requires_health(monkeypatch, tmp_path: Path):
     target = tmp_path / "gateway.env"
     target.write_text(render_env(validate_gateway_environment(environment()).values))
-    staged = stage_environment(
-        tmp_path / "stages", environment() | {"MESHTASTIC_HOP_LIMIT": "2"}
-    )
+    staged = stage_environment(tmp_path / "stages", environment() | {"MESHTASTIC_HOP_LIMIT": "2"})
     commands = []
     monkeypatch.setattr(
         "rns_meshtastic.gateway_config.subprocess.run",
-        lambda command, **kwargs: commands.append(command)
-        or type("Result", (), {"returncode": 0})(),
+        lambda command, **kwargs: commands.append(command) or type("Result", (), {"returncode": 0})(),
     )
     monkeypatch.setattr(
         "rns_meshtastic.gateway_config.urllib.request.urlopen",
@@ -131,14 +132,11 @@ def test_failed_health_check_rolls_back_target(monkeypatch, tmp_path: Path):
     original = validate_gateway_environment(environment()).values
     target = tmp_path / "gateway.env"
     target.write_text(render_env(original))
-    staged = stage_environment(
-        tmp_path / "stages", environment() | {"MESHTASTIC_HOP_LIMIT": "1"}
-    )
+    staged = stage_environment(tmp_path / "stages", environment() | {"MESHTASTIC_HOP_LIMIT": "1"})
     calls = []
     monkeypatch.setattr(
         "rns_meshtastic.gateway_config.subprocess.run",
-        lambda command, **kwargs: calls.append(command)
-        or type("Result", (), {"returncode": 0})(),
+        lambda command, **kwargs: calls.append(command) or type("Result", (), {"returncode": 0})(),
     )
 
     with pytest.raises(RuntimeError, match="health endpoint"):
@@ -149,7 +147,5 @@ def test_failed_health_check_rolls_back_target(monkeypatch, tmp_path: Path):
             health_url="http://127.0.0.1:8787/healthz",
             timeout=0,
         )
-    assert parse_env_file(target)["MESHTASTIC_HOP_LIMIT"] == original.get(
-        "MESHTASTIC_HOP_LIMIT", "3"
-    )
+    assert parse_env_file(target)["MESHTASTIC_HOP_LIMIT"] == original.get("MESHTASTIC_HOP_LIMIT", "3")
     assert len(calls) == 2

@@ -381,8 +381,12 @@ def _gateway_validate(args: argparse.Namespace) -> int:
     if args.json:
         import json
 
-        print(json.dumps({"valid": True, "warnings": result.warnings,
-                          "values": redact_environment(result.values)}, sort_keys=True))
+        print(
+            json.dumps(
+                {"valid": True, "warnings": result.warnings, "values": redact_environment(result.values)},
+                sort_keys=True,
+            )
+        )
     else:
         print("gateway configuration is valid")
         print(f"policy={result.values.get('RNS_LORA_POLICY', 'conservative')}")
@@ -401,6 +405,25 @@ def _gateway_console(args: argparse.Namespace) -> int:
         serve(args.bind, args.port, state)
     except KeyboardInterrupt:
         return 0
+    return 0
+
+
+def _lxmd_managed(args: argparse.Namespace) -> int:
+    from rns_meshtastic.lxmd_control import run_managed_lxmd
+
+    try:
+        run_managed_lxmd(
+            config_dir=Path(args.config_dir),
+            rns_config_dir=Path(args.rns_config_dir),
+            socket_path=Path(args.control_socket),
+            state_file=Path(args.state_file),
+            event_file=Path(args.event_file),
+            cooldown_seconds=args.cooldown_seconds,
+            verbosity=args.verbose,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"managed lxmd failed: {error}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -508,16 +531,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     traffic.set_defaults(func=_traffic_report)
 
-    validate = sub.add_parser(
-        "gateway-validate", help="validate and redact a managed Linux gateway env file"
-    )
+    validate = sub.add_parser("gateway-validate", help="validate and redact a managed Linux gateway env file")
     validate.add_argument("--env-file", required=True)
     validate.add_argument("--json", action="store_true")
     validate.set_defaults(func=_gateway_validate)
 
-    console = sub.add_parser(
-        "gateway-console", help="run the unprivileged Linux Gateway Console"
-    )
+    console = sub.add_parser("gateway-console", help="run the unprivileged Linux Gateway Console")
     console.add_argument("--bind", default="127.0.0.1")
     console.add_argument("--port", type=int, default=8787)
     console.add_argument("--config-dir", default="/data/rns")
@@ -525,16 +544,22 @@ def build_parser() -> argparse.ArgumentParser:
     console.add_argument("--stage-dir", default="/data/rns/gateway-staged")
     console.set_defaults(func=_gateway_console)
 
-    export = sub.add_parser(
-        "gateway-export", help="explicitly export a validated Console stage to stdout"
-    )
+    lxmd = sub.add_parser("lxmd-managed", help="run LXMD with a narrow local status/announce control socket")
+    lxmd.add_argument("--config-dir", default="/data/lxmd")
+    lxmd.add_argument("--rns-config-dir", default="/data/rns")
+    lxmd.add_argument("--control-socket", default="/data/rns/lxmd-control.sock")
+    lxmd.add_argument("--state-file", default="/data/lxmd/manual-announce-state.json")
+    lxmd.add_argument("--event-file", default="/data/rns/gateway-events.jsonl")
+    lxmd.add_argument("--cooldown-seconds", type=int, default=900)
+    lxmd.add_argument("--verbose", action="count", default=1)
+    lxmd.set_defaults(func=_lxmd_managed)
+
+    export = sub.add_parser("gateway-export", help="explicitly export a validated Console stage to stdout")
     export.add_argument("--stage-file", required=True)
     export.add_argument("--stage-dir", default="/data/rns/gateway-staged")
     export.set_defaults(func=_gateway_export)
 
-    apply = sub.add_parser(
-        "gateway-apply", help="apply a staged env with Compose health rollback"
-    )
+    apply = sub.add_parser("gateway-apply", help="apply a staged env with Compose health rollback")
     apply.add_argument("--stage-file", required=True)
     apply.add_argument("--target", required=True)
     apply.add_argument("--compose-file", default="compose.linux.yaml")

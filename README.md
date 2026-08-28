@@ -3,8 +3,8 @@
 Reticulum transport over Meshtastic using the officially assigned
 `RETICULUM_TUNNEL_APP` PortNum 76. The functional MVP is complete: Reticulum
 announces, LXMF messages and small payloads have crossed real Meshtastic LoRa
-and MQTT paths between Linux, Sideband and Columba clients. Android 0.3.0 is a
-production candidate and the Linux Gateway Console milestone is implemented;
+and MQTT paths between Linux, Sideband and Columba clients. Android 0.4.0 is a
+signed-release candidate and Linux Gateway Console 0.4 is implemented;
 stable/emergency-communications readiness still depends on the documented soak
 and release gates.
 
@@ -23,8 +23,8 @@ MQTT configuration. Configure radios with an official Meshtastic client first.
 | Queue, power and background hardening | Active | Bounded queues, pacing and Android foreground operation are implemented; longer field tests continue. |
 | Linux LXMF propagation service | Implemented, field acceptance pending | Reproducible non-root `rnsd` + `lxmd` containers, persistent state and conservative quotas are available. |
 | Public-network boundary | Implemented, acceptance active | Up to eight explicit outbound upstreams use `boundary`; radio remains `internal`, while opt-in LAN public visibility and baseline/delta traffic reporting are available. |
-| Linux Gateway Console | Implemented in 0.3.0 | Localhost/VPN-only status, telemetry, LXMD hash/QR, safe validation/staging and explicit CLI rollback are available. |
-| Companion API | Implemented in 0.3.0 | Android exposes read-only constrained-transport capabilities and telemetry on `127.0.0.1:7823`; Linux publishes the common contract through Console. |
+| Linux Gateway Console | Implemented in 0.4.0 | Human traffic/rates, real-or-unavailable LXMD counters, manual announce cooldown, schema-driven configuration, bounded events, alerts and explicit CLI rollback are available. |
+| Companion API | Implemented in 0.4.0 | Android exposes read-only constrained-transport capabilities and telemetry on `127.0.0.1:7823`; Linux publishes additive availability/source fields through Console. |
 | iOS bridge | Feasibility and delivery plan complete | The supported direction is an in-process interface inside an iOS Reticulum/LXMF client, not a standalone cross-app background bridge. |
 | Production readiness | Not claimed | Capacity limits, delivery behaviour and failure recovery still need wider measurement and soak testing. |
 
@@ -60,13 +60,15 @@ The Linux/NixOS implementation provides:
 - opt-in public announce visibility for trusted LAN/VPN clients while the
   Meshtastic radio stays isolated as `internal`.
 - an unprivileged web Console with no Docker socket, separate LoRa/LAN/public
-  counters, LXMD status, Prometheus metrics and staged configuration that can
+  counters and rates, measured-or-unavailable LXMD propagation traffic, a
+  schema-driven editor, manual LXMD announce cooldown, bounded structured
+  events, active alerts, Prometheus metrics and staged configuration that can
   only be applied explicitly from the host CLI with health rollback;
 - conservative/balanced/custom radio policy profiles plus manual or trusted,
   allowlisted Reticulum interface discovery. Discovered upstreams remain
   `boundary` and cannot turn the radio into public transit.
 
-Android bridge 0.3.0 provides:
+Android bridge 0.4.0 provides:
 
 - a direct BLE or TCP PhoneAPI connection without depending on the official
   Meshtastic Android app;
@@ -258,7 +260,9 @@ Gateway Console operation and safe apply/rollback are in
 frozen wire format and upstream integration sequence are in
 [docs/COMPANION_API.md](docs/COMPANION_API.md),
 [docs/PORT76_PROTOCOL.md](docs/PORT76_PROTOCOL.md) and
-[docs/CLIENT_INTEGRATIONS.md](docs/CLIENT_INTEGRATIONS.md).
+[docs/CLIENT_INTEGRATIONS.md](docs/CLIENT_INTEGRATIONS.md). The direct Columba
+design and its explicit upstream licence gate are in
+[docs/COLUMBA_DIRECT_INTERFACE.md](docs/COLUMBA_DIRECT_INTERFACE.md).
 
 The selected public-network boundary, strict-isolation alternative and iOS
 integration effort are documented in

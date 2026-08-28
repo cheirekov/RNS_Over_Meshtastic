@@ -4,65 +4,91 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RNS Meshtastic Gateway Console</title>
 <style>
-:root { color-scheme: dark; --bg:#101418; --card:#192128; --fg:#e6edf3; --muted:#95a5b1; --ok:#4fd18b; --warn:#f0bd4f }
-body { font:15px system-ui; margin:0; background:var(--bg); color:var(--fg) }
-main { max-width:1100px; margin:auto; padding:24px }
-.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px }
-.card { background:var(--card); padding:16px; border-radius:12px; margin:12px 0 }
-code, pre { white-space:pre-wrap; word-break:break-word }
-label { display:block; color:var(--muted); margin-top:8px }
-input, select, button { width:100%; box-sizing:border-box; padding:9px; margin-top:4px; background:#0e151b; color:var(--fg); border:1px solid #42515d; border-radius:7px }
-button { cursor:pointer; background:#254d68 }.ok { color:var(--ok) }.warn { color:var(--warn) } a { color:#7cc7ff }
+:root { color-scheme:dark; --bg:#0d1217; --card:#172028; --card2:#101820; --fg:#e8eef3; --muted:#9babb7; --line:#344652; --accent:#4c9ccc; --ok:#4fd18b; --warn:#f0bd4f; --error:#ff7474 }
+* { box-sizing:border-box } body { font:15px/1.45 system-ui,sans-serif; margin:0; background:var(--bg); color:var(--fg) }
+main { max-width:1240px; margin:auto; padding:22px } h1 { margin:.1em 0 } h2 { font-size:1.25rem; margin:.2em 0 .8em } h3 { margin:.8em 0 .3em }
+.muted { color:var(--muted) } .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px }
+.card { background:var(--card); padding:17px; border-radius:13px; margin:12px 0; box-shadow:0 1px 0 #ffffff0a inset }
+.metric { display:flex; justify-content:space-between; gap:12px; padding:4px 0; border-bottom:1px solid #ffffff0b }.metric:last-child { border:0 }
+.ok { color:var(--ok) }.warning { color:var(--warn) }.error { color:var(--error) }.pill { border:1px solid var(--line); border-radius:999px; padding:2px 8px; font-size:.82rem }
+code,pre { white-space:pre-wrap; word-break:break-word } pre { background:#0a1015; border:1px solid var(--line); border-radius:8px; padding:12px; max-height:360px; overflow:auto }
+label { display:block; color:var(--muted) } input,select,button { width:100%; padding:9px; margin-top:4px; background:#0d151c; color:var(--fg); border:1px solid #425561; border-radius:7px }
+button { cursor:pointer; background:#245b78 } button.secondary { background:#152a36 } button:disabled { opacity:.55; cursor:not-allowed }.button-row { display:flex; gap:8px; flex-wrap:wrap }.button-row>* { flex:1; min-width:140px }
+.config-group { padding:12px; background:var(--card2); border:1px solid #263640; border-radius:10px }.config-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:12px }
+.field { min-width:0 }.field-head { display:flex; align-items:center; gap:6px }.field-name { overflow-wrap:anywhere }.secret-state { padding:9px; margin-top:4px; border:1px dashed var(--line); border-radius:7px }
+details.help { display:inline-block; position:relative } details.help summary { cursor:pointer; list-style:none; color:#8fd1fa; border:1px solid var(--line); border-radius:50%; width:19px; height:19px; text-align:center; font-size:12px }
+details.help div { position:absolute; z-index:4; width:min(330px,80vw); padding:10px; background:#081016; border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 30px #0008; color:var(--fg) }
+.advanced.hidden { display:none }.toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap }.toolbar label { color:var(--fg) }.toolbar input { width:auto }
+table { width:100%; border-collapse:collapse } th,td { text-align:left; padding:7px; border-bottom:1px solid #ffffff14; vertical-align:top } th { color:var(--muted) }
+#toast { position:fixed; right:18px; bottom:18px; background:#173a2c; border:1px solid var(--ok); padding:10px 14px; border-radius:8px; display:none; z-index:20 }
+a { color:#83cbfa } @media(max-width:600px){main{padding:12px}.card{padding:13px}table{font-size:.86rem}.hide-small{display:none}}
 </style>
 <main>
-  <h1>RNS Meshtastic Gateway Console</h1><p id="updated">Loading…</p>
+  <div class="toolbar"><div><h1>RNS Meshtastic Gateway Console</h1><div class="muted" id="updated">Loading…</div></div><span class="pill" id="version">v…</span></div>
   <div class="grid">
     <section class="card"><h2>Transport</h2><div id="transport"></div></section>
-    <section class="card"><h2>Traffic</h2><div id="traffic"></div></section>
+    <section class="card"><h2>Traffic</h2><div id="traffic"></div><small class="muted">Reticulum payload counters, not RF airtime.</small></section>
     <section class="card"><h2>LXMD mailbox</h2><div id="lxmd"></div></section>
     <section class="card"><h2>Peers / upstreams</h2><div id="peers"></div></section>
   </div>
-  <section class="card"><h2>Safe staged configuration</h2>
-    <p>Secrets and IFAC passphrases are never returned. Edit them only in the protected env file.</p>
-    <div class="grid" id="config"></div>
-    <button onclick="validateConfig(false)">Validate</button>
-    <button onclick="validateConfig(true)">Stage configuration</button><pre id="result"></pre>
-  </section>
   <section class="card"><h2>Alerts</h2><div id="alerts"></div></section>
+  <section class="card"><div class="toolbar"><div><h2>Safe staged configuration</h2><div class="muted">Secrets are never returned. Browser changes require an explicit CLI apply.</div></div><label><input id="advancedToggle" type="checkbox" onchange="toggleAdvanced()"> Show advanced</label></div>
+    <div id="configGroups"></div>
+    <div class="button-row"><button onclick="validateConfig(false)">Validate</button><button onclick="validateConfig(true)">Stage configuration</button></div><pre id="result" hidden></pre>
+  </section>
+  <section class="card"><div class="toolbar"><h2>Recent events</h2><span class="muted">Structured, bounded and secret-free</span></div>
+    <div style="overflow:auto"><table><thead><tr><th>Time</th><th>Source</th><th>Event</th><th class="hide-small">Message</th></tr></thead><tbody id="events"></tbody></table></div>
+  </section>
 </main>
+<div id="toast" role="status"></div>
 <script>
-const fields = [
-  'MESHTASTIC_TCP_HOST','MESHTASTIC_CHANNEL_INDEX','MESHTASTIC_HOP_LIMIT',
-  'MESHTASTIC_MQTT_FORWARDING_POLICY','RNS_MESH_MODE','RNS_ALLOWED_NODES',
-  'RNS_LORA_POLICY','RNS_PUBLIC_UPSTREAMS','RNS_LAN_PUBLIC_VISIBILITY',
-  'RNS_PUBLIC_DISCOVERY','RNS_DISCOVERY_SOURCES','LXMD_DISPLAY_NAME'
-];
+let schema = null, eventCursor = 0, eventRows = [];
 const esc = value => String(value ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const attr = value => String(value ?? '').replace(/[&<>"']/g, c => ({
-  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-}[c]));
-async function loadConfig() {
-  const current = await fetch('/api/v1/config').then(response => response.json());
-  config.innerHTML = fields.map(key => `<label>${key}<input id="f_${key}" value="${attr(current.values[key] || '')}"></label>`).join('');
+const attr = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const formatBytes = value => { let amount=Number(value||0), units=['B','KiB','MiB','GiB','TiB'], index=0; while(Math.abs(amount)>=1024&&index<units.length-1){amount/=1024;index++} return index===0?`${Math.round(amount)} B`:`${amount.toFixed(amount<10?2:1)} ${units[index]}` };
+const formatRate = value => { let amount=Number(value||0), units=['bps','Kbps','Mbps','Gbps'], index=0; while(Math.abs(amount)>=1000&&index<units.length-1){amount/=1000;index++} return `${amount.toFixed(index?1:0)} ${units[index]}` };
+function toast(message, bad=false){ const box=document.getElementById('toast'); box.textContent=message; box.style.display='block'; box.style.borderColor=bad?'var(--error)':'var(--ok)'; clearTimeout(box.timer); box.timer=setTimeout(()=>box.style.display='none',3000) }
+async function copyHash(value){
+  try { if(navigator.clipboard&&window.isSecureContext){ await navigator.clipboard.writeText(value) } else { const area=document.createElement('textarea'); area.value=value; area.style.position='fixed'; area.style.opacity='0'; document.body.appendChild(area); area.focus(); area.select(); if(!document.execCommand('copy')) throw new Error('copy command failed'); area.remove() } toast('Propagation hash copied') }
+  catch(error){ toast(`Copy failed: ${error.message}`,true) }
 }
-async function refresh() {
+function toggleAdvanced(){ const show=document.getElementById('advancedToggle').checked; document.querySelectorAll('.advanced').forEach(node=>node.classList.toggle('hidden',!show)) }
+function fieldControl(field,value){
+  if(field.secret) return `<div class="secret-state">${value==='&lt;configured&gt;'||value==='<configured>'?'Configured':'Not configured'} — edit protected env file</div>`;
+  const id=`f_${field.name}`, common=`id="${id}" class="config-input" data-name="${field.name}"`;
+  if(field.choices.length) return `<select ${common}>${field.choices.map(choice=>`<option value="${attr(choice)}" ${choice===value?'selected':''}>${esc(choice)}</option>`).join('')}</select>`;
+  const type=field.type==='integer'||field.type==='number'?'number':'text', step=field.type==='number'?'any':'1';
+  return `<input ${common} type="${type}" step="${step}" ${field.minimum!=null?`min="${field.minimum}"`:''} ${field.maximum!=null?`max="${field.maximum}"`:''} value="${attr(value||field.default||'')}">`;
+}
+async function loadConfig(){
+  const [definition,current]=await Promise.all([fetch('/api/v1/config/schema').then(r=>r.json()),fetch('/api/v1/config').then(r=>r.json())]); schema=definition;
+  configGroups.innerHTML=definition.groups.map(group=>{ const fields=definition.fields.filter(field=>field.group===group.id); return `<section class="config-group"><h3>${esc(group.label)}</h3><div class="config-fields">${fields.map(field=>{const value=current.values[field.name]??''; const detail=`${esc(field.help)}${field.recommended?`<br><b>Recommended:</b> ${esc(field.recommended)}`:''}${field.required_when?`<br><b>Required:</b> ${esc(field.required_when)}`:''}`; return `<div class="field ${field.advanced?'advanced hidden':''}"><div class="field-head"><label class="field-name" for="f_${field.name}">${field.name}</label><details class="help"><summary aria-label="Help for ${attr(field.name)}">?</summary><div>${detail}</div></details></div>${fieldControl(field,value)}</div>`}).join('')}</div></section>` }).join('');
+}
+function trafficLine(label,counter){ if(!counter.available) return `<div class="metric"><span>${label}</span><span class="muted" title="${attr(counter.source)}">not available</span></div>`; const title=`Exact: RX ${counter.rx_bytes} B, TX ${counter.tx_bytes} B; source ${counter.source}`; return `<div class="metric" title="${attr(title)}"><span>${label}</span><span>↓ ${formatBytes(counter.rx_bytes)} <small class="muted">${formatRate(counter.rx_bps)}</small><br>↑ ${formatBytes(counter.tx_bytes)} <small class="muted">${formatRate(counter.tx_bps)}</small></span></div>` }
+async function refresh(){
   try {
-    const state = await fetch('/api/v1/status').then(response => response.json());
-    updated.textContent = `Updated ${state.captured_at}`;
-    transport.innerHTML = `RNS: <b class="ok">${esc(state.rns_state)}</b><br>Radio: ${esc(state.radio_state)}<br>Policy: ${esc(state.policy_profile)}<br>Topology: ${esc(state.topology)}<br>Uptime: ${Math.round(state.uptime_seconds)}s`;
-    traffic.innerHTML = ['lora','lan','public','propagation'].map(key => `${key}: ↓${state.traffic[key].rx_bytes} B ↑${state.traffic[key].tx_bytes} B`).join('<br>');
-    const mailbox = state.lxmd;
-    lxmd.innerHTML = mailbox.destination_hash ? `<code>${mailbox.destination_hash}</code><br><button onclick="navigator.clipboard.writeText('${mailbox.destination_hash}')">Copy hash</button><a href="/api/v1/lxmd/qr" target="_blank">Open QR</a><br>${esc(mailbox.message_count)} messages, ${esc(mailbox.store_utilisation)}` : esc(mailbox.summary);
-    peers.innerHTML = `Meshtastic peers: ${state.peers.map(peer => `${esc(peer.peer)} (${peer.routes} routes)`).join(', ') || 'none'}<br>RNS routes: ${state.routes.length}<hr>` + Object.entries(state.public_interfaces).map(([key,value]) => `${esc(key)}: ${value.up ? 'up' : 'down'}, stability ${value.observed_up_percent}%, reconnects ${value.reconnects}`).join('<br>');
-    alerts.innerHTML = state.alerts.map(alert => `<div class="${alert.severity === 'error' ? 'warn' : ''}">${esc(alert.code)}: ${esc(alert.message)}</div>`).join('') || 'none';
-  } catch (error) { updated.textContent = `Status unavailable: ${error}`; }
+    const state=await fetch('/api/v1/status').then(response=>{if(!response.ok)throw new Error(`HTTP ${response.status}`);return response.json()});
+    updated.textContent=`Updated ${new Date(state.captured_at).toLocaleString()}`; version.textContent=`v${state.implementation_version}`;
+    transport.innerHTML=`<div class="metric"><span>RNS</span><b class="${state.rns_state==='up'?'ok':'error'}">${esc(state.rns_state)}</b></div><div class="metric"><span>Radio</span><b>${esc(state.radio_state)}</b></div><div class="metric"><span>Policy</span><b>${esc(state.policy_profile)}</b></div><div class="metric"><span>Topology</span><b>${esc(state.topology)}</b></div><div class="metric"><span>LAN clients</span><b>${state.lan_client_count}</b></div><div class="metric"><span>Queue pressure</span><b>${state.queue_pressure_percent}%</b></div><div class="metric"><span>Uptime</span><b>${Math.round(state.uptime_seconds)}s</b></div>`;
+    traffic.innerHTML=trafficLine('LoRa',state.traffic.lora)+trafficLine('LAN',state.traffic.lan)+trafficLine('Public TCP',state.traffic.public)+trafficLine('LXMD peering',state.traffic.propagation);
+    const mailbox=state.lxmd;
+    if(mailbox.destination_hash){ const usage=mailbox.store_utilisation_percent!=null?`${mailbox.store_utilisation_percent}%`:(mailbox.store_utilisation||'unknown'); lxmd.innerHTML=`<code>${mailbox.destination_hash}</code><div class="button-row"><button onclick="copyHash('${mailbox.destination_hash}')">Copy hash</button><button class="secondary" onclick="window.open('/api/v1/lxmd/qr','_blank')">Open QR</button></div><button onclick="announceLxmd()">Announce propagation node</button><div class="metric"><span>Store</span><span>${esc(mailbox.message_count)} messages, ${esc(usage)}</span></div>${mailbox.next_manual_announce_at?`<small class="muted">Next manual announce after ${new Date(mailbox.next_manual_announce_at*1000).toLocaleString()}</small>`:''}` } else lxmd.innerHTML=`<span class="warning">${esc(mailbox.summary||'LXMD unavailable')}</span>`;
+    const peerList=state.peers.map(peer=>`${esc(peer.peer)} (${peer.routes} routes)`).join(', ')||'none'; const upstreams=Object.entries(state.public_interfaces).map(([key,value])=>`<div class="metric"><span>${esc(key)}</span><span class="${value.up?'ok':'warning'}">${value.up?'up':'down'} · ${value.observed_up_percent}% · ${value.reconnects} reconnects</span></div>`).join(''); peers.innerHTML=`<div>Meshtastic: ${peerList}</div><div>RNS routes: ${state.routes.length}</div>${upstreams?`<hr>${upstreams}`:''}`;
+    alerts.innerHTML=state.alerts.length?state.alerts.map(alert=>`<div class="${alert.severity}"><b>${esc(alert.code)}</b> — ${esc(alert.message)}</div>`).join(''):'<div class="ok"><b>No active alerts</b></div>';
+  } catch(error){ updated.textContent=`Status unavailable: ${error}`; alerts.innerHTML=`<div class="error">Console status request failed: ${esc(error)}</div>` }
 }
-async function validateConfig(stage) {
-  const changes = {}; fields.forEach(key => changes[key] = document.getElementById(`f_${key}`).value);
-  const endpoint = stage ? '/api/v1/config/stage' : '/api/v1/config/validate';
-  const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(changes)});
-  result.textContent = JSON.stringify(await response.json(), null, 2);
+async function announceLxmd(){
+  if(!confirm('Send one LXMD propagation announce? This intentionally consumes LoRa airtime and is rate-limited.')) return;
+  const response=await fetch('/api/v1/lxmd/announce',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); const value=await response.json();
+  if(response.ok){toast('Propagation announce scheduled');refresh()}else toast(value.error||'Announce failed',true);
 }
-loadConfig(); refresh(); setInterval(refresh, 5000);
+async function validateConfig(stage){
+  const changes={}; document.querySelectorAll('.config-input').forEach(input=>changes[input.dataset.name]=input.value); const endpoint=stage?'/api/v1/config/stage':'/api/v1/config/validate';
+  const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(changes)}); const value=await response.json(); result.hidden=false; result.textContent=JSON.stringify(value,null,2); toast(response.ok?(stage?'Configuration staged':'Configuration valid'):(value.error||'Validation failed'),!response.ok);
+}
+async function refreshEvents(){
+  try { const value=await fetch(`/api/v1/events?after=${eventCursor}&limit=100`).then(r=>r.json()); eventCursor=value.cursor; eventRows=eventRows.concat(value.events).slice(-100); events.innerHTML=eventRows.slice().reverse().map(event=>`<tr><td>${new Date(event.captured_at).toLocaleTimeString()}</td><td>${esc(event.source)}</td><td class="${event.severity}">${esc(event.code)}</td><td class="hide-small">${esc(event.message)}</td></tr>`).join('')||'<tr><td colspan="4" class="muted">No events recorded yet</td></tr>' } catch(error){}
+}
+loadConfig().catch(error=>{configGroups.innerHTML=`<div class="error">Configuration unavailable: ${esc(error)}</div>`}); refresh(); refreshEvents(); setInterval(()=>{refresh();refreshEvents()},5000);
 </script>
 </html>

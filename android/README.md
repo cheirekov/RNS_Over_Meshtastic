@@ -8,12 +8,12 @@ the Meshtastic Android app is not required.
 The bridge is intentionally loopback-only. Sideband or Columba runs on the
 same phone and connects to it as a normal Reticulum TCP client.
 
-Version 0.3.0 adds a read-only companion API on `127.0.0.1:7823` so clients can
+Version 0.4.0 preserves the read-only companion API on `127.0.0.1:7823` so clients can
 identify the real constrained LoRa path instead of interpreting the local TCP
-hop as 10 Mbps. It also adds copy/import of non-secret configuration, explicit
-LoRa safety warnings, the `rnsmeshtastic://settings` deep link and frozen port
-76 interoperability vectors. Transport framing, multi-peer routing and
-scheduler behavior remain unchanged from 0.2.2.
+hop as 10 Mbps. Release builds now require an explicit private signing identity;
+Gradle fails instead of creating an unsigned, non-installable APK. Transport
+framing, `auto_multi_peer`, scheduling, repair and companion JSON behavior are
+unchanged from 0.3.0.
 
 Version 0.1.8 reports both bridge directions, the last accepted Meshtastic
 peer/path metadata and optional per-fragment Meshtastic routing ACK/NAK. A
@@ -195,31 +195,75 @@ android/app/build/outputs/apk/debug/app-debug.apk
 
 ## Signed release build
 
-Never commit a keystore or passwords. Mount/provide the keystore to the build
-environment and set all four variables:
+Never commit a keystore or passwords. Version 0.4.0 intentionally fails every
+release task unless all signing inputs are present.
+
+### One-time production identity
+
+Create a private directory outside the repository and run `keytool` inside the
+pinned Android build container. The command is interactive, so passwords do
+not appear in shell history:
 
 ```bash
-export ANDROID_KEYSTORE_FILE=/secure/path/rns-meshtastic-release.jks
+install -d -m 700 /secure/rns-meshtastic-signing
+cd android
+docker compose run --rm \
+  -v /secure/rns-meshtastic-signing:/secure \
+  android-build keytool -genkeypair \
+  -keystore /secure/rns-meshtastic-release.jks \
+  -alias rns-meshtastic -keyalg RSA -keysize 4096 -validity 10000
+chmod 600 /secure/rns-meshtastic-signing/rns-meshtastic-release.jks
+```
+
+Back up the keystore and alias in two protected locations. Back up passwords in
+a password manager. Losing the signing identity makes upgrades of the installed
+application impossible.
+
+### Build, verify and archive
+
+Set all four variables and use the project-managed workflow:
+
+```bash
+export ANDROID_KEYSTORE_FILE=/secure/rns-meshtastic-signing/rns-meshtastic-release.jks
 export ANDROID_KEYSTORE_PASSWORD='...'
 export ANDROID_KEY_ALIAS='rns-meshtastic'
 export ANDROID_KEY_PASSWORD='...'
 cd android
-docker compose run --rm \
-  -v "$ANDROID_KEYSTORE_FILE:/run/secrets/release.jks:ro" \
-  -e ANDROID_KEYSTORE_FILE=/run/secrets/release.jks \
-  -e ANDROID_KEYSTORE_PASSWORD \
-  -e ANDROID_KEY_ALIAS \
-  -e ANDROID_KEY_PASSWORD \
-  android-build gradle --no-daemon testDebugUnitTest assembleRelease
+./release-build.sh
 ```
 
-The resulting APK is `app/build/outputs/apk/release/app-release.apk`. Keep the
-same key for upgrades. Before rollout, retain the last signed APK, export the
-bridge configuration, install 0.3.0 over 0.2.2 and verify that settings and
-identity-bearing client data are unchanged. Rollback is installation of the
-previous APK signed with the same key; Android does not allow a lower
-`versionCode`, so a rollback build must use a higher code or the app must be
-uninstalled (which removes app settings).
+The script runs a clean build and unit tests, creates a signed APK, executes
+`apksigner verify --verbose --print-certs`, writes SHA-256 and certificate
+details, and archives the results in the ignored directory
+`android/release-artifacts/`. Store the APK, checksum, certificate report and a
+copy of the signing identity together for rollback auditing. The script never
+prints signing passwords.
+
+For an independent verification:
+
+```bash
+cd android
+docker compose run --rm android-build \
+  /opt/android-sdk/build-tools/35.0.0/apksigner \
+  verify --verbose --print-certs \
+  /workspace/android/release-artifacts/app-release.apk
+(cd release-artifacts && sha256sum -c app-release.apk.sha256)
+```
+
+### Install, upgrade and rollback
+
+The debug and production certificates differ. For the first transition:
+
+1. Export the bridge settings from the installed debug app.
+2. Save any client identity/data according to that client's backup procedure.
+3. Uninstall the debug bridge, which removes its local app settings.
+4. Install the signed 0.4.0 APK and import the bridge settings.
+
+Every later release must use the same keystore and alias, allowing a normal
+upgrade that preserves settings. Before rollout retain the last signed APK.
+Android normally refuses downgrade to a lower `versionCode`; rollback therefore
+requires a new APK signed by the same key with a higher code, or uninstall/reinstall
+with the documented data-loss consequence.
 
 Compose keeps Gradle's debug signing keystore in the
 `android-debug-signing` Docker volume. Keep that volume to install later debug

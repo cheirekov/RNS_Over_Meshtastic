@@ -6,7 +6,7 @@ radio host, IFAC, channel keys или други credentials.
 
 ## Android
 
-Android bridge 0.3.0 запазва raw RNS listener на `127.0.0.1:7822` и слуша само
+Android bridge 0.4.0 запазва raw RNS listener на `127.0.0.1:7822` и слуша само
 на IPv4 loopback за HTTP:
 
 ```text
@@ -25,8 +25,11 @@ RNS frame, Meshtastic PortNum 76 и addressing modes.
 
 `BridgeStatusV1` описва lifecycle, policy, topology и alerts.
 `BridgeTrafficSnapshotV1` разделя `lora`, `lan`, `public` и `propagation` с
-`rx_bytes`, `tx_bytes`, `rx_bps`, `tx_bps`. Android не измерва public/LXMD
-сегмент и връща нули за тях. Допълнителните frame/fragment/queue fields са
+`rx_bytes`, `tx_bytes`, `rx_bps`, `tx_bps`, `available` и `source`.
+`available=false` означава, че counter-ът не е измерен; нулева стойност при
+`available=true` означава реално измерени нула bytes. Android не измерва
+public/LXMD сегмент и ги маркира като unavailable. Допълнителните
+frame/fragment/queue fields са
 implementation-specific, но backward-compatible в schema 1.
 
 `BridgePeerRouteV1` използва radio Node ID, route count и last-seen когато
