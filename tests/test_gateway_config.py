@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from rns_meshtastic.gateway_config import (
+    MANAGED_FIELDS,
     apply_staged_environment,
     environment_from_process,
     parse_env_file,
@@ -78,6 +79,13 @@ def test_process_environment_is_strictly_allowlisted(monkeypatch):
     values = environment_from_process()
     assert values["MESHTASTIC_TCP_HOST"] == "192.0.2.10"
     assert "UNRELATED_CI_TOKEN" not in values
+
+
+def test_example_documents_every_managed_setting():
+    example = Path(__file__).parents[1] / "examples" / "linux-service.env.example"
+    values = parse_env_file(example)
+    assert set(values) == set(MANAGED_FIELDS)
+    validate_gateway_environment(values)
 
 
 class _HealthyResponse:

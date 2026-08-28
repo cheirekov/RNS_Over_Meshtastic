@@ -31,6 +31,9 @@ def test_renders_restricted_gateway_and_bounded_lxmd(tmp_path: Path) -> None:
     assert "allowed_nodes = !a1b3b3b8, !8fd13c64" in rns_config
     assert "mode = gateway" in rns_config
     assert "No public boundary upstreams configured" in rns_config
+    assert "discover_interfaces = No" in rns_config
+    assert "interface_discovery_sources =" not in rns_config
+    assert "interface_discovery_sources omitted" in rns_config
     assert "network_name = radio-private" in rns_config
     assert "autopeer = no" in lxmd_config
     assert "from_static_only = yes" in lxmd_config
@@ -121,6 +124,9 @@ def test_trusted_discovery_is_boundary_only_and_keeps_radio_internal(tmp_path: P
     config = (tmp_path / "rns" / "config").read_text()
     radio, lan = config.split("  [[LAN VPN Reticulum clients]]", maxsplit=1)
     assert "discover_interfaces = Yes" in config
+    assert (
+        "interface_discovery_sources = 0123456789abcdef0123456789abcdef" in config
+    )
     assert "autoconnect_discovered_interfaces = 2" in config
     assert "autoconnect_interface_mode = boundary" in config
     assert "autoconnect_announces_to_internal = No" in config

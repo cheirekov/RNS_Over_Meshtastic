@@ -245,9 +245,14 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
             "  autoconnect_announces_to_internal = No"
         )
     )
+    discovery_sources_line = (
+        f"  interface_discovery_sources = {', '.join(discovery_sources)}"
+        if discovery_sources
+        else "  # interface_discovery_sources omitted: no identity allowlist configured"
+    )
     discovery_block = (
         f"  discover_interfaces = {'No' if discovery == 'off' else 'Yes'}\n"
-        f"  interface_discovery_sources = {', '.join(discovery_sources)}\n"
+        f"{discovery_sources_line}\n"
         "  required_discovery_value = 14\n"
         f"{autoconnect_policy}"
     )
