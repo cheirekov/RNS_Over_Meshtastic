@@ -10,6 +10,26 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class FragmentProtocolTest {
+    @Test public void matchesFrozenPort76BinaryVector() {
+        FragmentProtocol protocol = new FragmentProtocol(8);
+        byte[] frame = new byte[20];
+        for (int index = 0; index < frame.length; index++) frame[index] = (byte) index;
+        List<FragmentProtocol.Transmission> fragments = protocol.encode(frame, "!aabbcc11");
+
+        assertEquals(3, fragments.size());
+        assertArrayEquals(hex("00010001020304050607"), fragments.get(0).payload);
+        assertArrayEquals(hex("000208090a0b0c0d0e0f"), fragments.get(1).payload);
+        assertArrayEquals(hex("00fd10111213"), fragments.get(2).payload);
+    }
+
+    private static byte[] hex(String value) {
+        byte[] result = new byte[value.length() / 2];
+        for (int index = 0; index < result.length; index++) {
+            result[index] = (byte) Integer.parseInt(value.substring(index * 2, index * 2 + 2), 16);
+        }
+        return result;
+    }
+
     @Test public void reassemblesOutOfOrderAndRequestsMissingFragment() {
         FragmentProtocol sender = new FragmentProtocol(3);
         FragmentProtocol receiver = new FragmentProtocol(3);

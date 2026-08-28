@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RNS Meshtastic Gateway Console</title>
+<style>
+:root { color-scheme: dark; --bg:#101418; --card:#192128; --fg:#e6edf3; --muted:#95a5b1; --ok:#4fd18b; --warn:#f0bd4f }
+body { font:15px system-ui; margin:0; background:var(--bg); color:var(--fg) }
+main { max-width:1100px; margin:auto; padding:24px }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px }
+.card { background:var(--card); padding:16px; border-radius:12px; margin:12px 0 }
+code, pre { white-space:pre-wrap; word-break:break-word }
+label { display:block; color:var(--muted); margin-top:8px }
+input, select, button { width:100%; box-sizing:border-box; padding:9px; margin-top:4px; background:#0e151b; color:var(--fg); border:1px solid #42515d; border-radius:7px }
+button { cursor:pointer; background:#254d68 }.ok { color:var(--ok) }.warn { color:var(--warn) } a { color:#7cc7ff }
+</style>
+<main>
+  <h1>RNS Meshtastic Gateway Console</h1><p id="updated">Loading…</p>
+  <div class="grid">
+    <section class="card"><h2>Transport</h2><div id="transport"></div></section>
+    <section class="card"><h2>Traffic</h2><div id="traffic"></div></section>
+    <section class="card"><h2>LXMD mailbox</h2><div id="lxmd"></div></section>
+    <section class="card"><h2>Peers / upstreams</h2><div id="peers"></div></section>
+  </div>
+  <section class="card"><h2>Safe staged configuration</h2>
+    <p>Secrets and IFAC passphrases are never returned. Edit them only in the protected env file.</p>
+    <div class="grid" id="config"></div>
+    <button onclick="validateConfig(false)">Validate</button>
+    <button onclick="validateConfig(true)">Stage configuration</button><pre id="result"></pre>
+  </section>
+  <section class="card"><h2>Alerts</h2><div id="alerts"></div></section>
+</main>
+<script>
+const fields = [
+  'MESHTASTIC_TCP_HOST','MESHTASTIC_CHANNEL_INDEX','MESHTASTIC_HOP_LIMIT',
+  'MESHTASTIC_MQTT_FORWARDING_POLICY','RNS_MESH_MODE','RNS_ALLOWED_NODES',
+  'RNS_LORA_POLICY','RNS_PUBLIC_UPSTREAMS','RNS_LAN_PUBLIC_VISIBILITY',
+  'RNS_PUBLIC_DISCOVERY','RNS_DISCOVERY_SOURCES','LXMD_DISPLAY_NAME'
+];
+const esc = value => String(value ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const attr = value => String(value ?? '').replace(/[&<>"']/g, c => ({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[c]));
+async function loadConfig() {
+  const current = await fetch('/api/v1/config').then(response => response.json());
+  config.innerHTML = fields.map(key => `<label>${key}<input id="f_${key}" value="${attr(current.values[key] || '')}"></label>`).join('');
+}
+async function refresh() {
+  try {
+    const state = await fetch('/api/v1/status').then(response => response.json());
+    updated.textContent = `Updated ${state.captured_at}`;
+    transport.innerHTML = `RNS: <b class="ok">${esc(state.rns_state)}</b><br>Radio: ${esc(state.radio_state)}<br>Policy: ${esc(state.policy_profile)}<br>Topology: ${esc(state.topology)}<br>Uptime: ${Math.round(state.uptime_seconds)}s`;
+    traffic.innerHTML = ['lora','lan','public','propagation'].map(key => `${key}: ↓${state.traffic[key].rx_bytes} B ↑${state.traffic[key].tx_bytes} B`).join('<br>');
+    const mailbox = state.lxmd;
+    lxmd.innerHTML = mailbox.destination_hash ? `<code>${mailbox.destination_hash}</code><br><button onclick="navigator.clipboard.writeText('${mailbox.destination_hash}')">Copy hash</button><a href="/api/v1/lxmd/qr" target="_blank">Open QR</a><br>${esc(mailbox.message_count)} messages, ${esc(mailbox.store_utilisation)}` : esc(mailbox.summary);
+    peers.innerHTML = `Meshtastic peers: ${state.peers.map(peer => `${esc(peer.peer)} (${peer.routes} routes)`).join(', ') || 'none'}<br>RNS routes: ${state.routes.length}<hr>` + Object.entries(state.public_interfaces).map(([key,value]) => `${esc(key)}: ${value.up ? 'up' : 'down'}, stability ${value.observed_up_percent}%, reconnects ${value.reconnects}`).join('<br>');
+    alerts.innerHTML = state.alerts.map(alert => `<div class="${alert.severity === 'error' ? 'warn' : ''}">${esc(alert.code)}: ${esc(alert.message)}</div>`).join('') || 'none';
+  } catch (error) { updated.textContent = `Status unavailable: ${error}`; }
+}
+async function validateConfig(stage) {
+  const changes = {}; fields.forEach(key => changes[key] = document.getElementById(`f_${key}`).value);
+  const endpoint = stage ? '/api/v1/config/stage' : '/api/v1/config/validate';
+  const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(changes)});
+  result.textContent = JSON.stringify(await response.json(), null, 2);
+}
+loadConfig(); refresh(); setInterval(refresh, 5000);
+</script>
+</html>

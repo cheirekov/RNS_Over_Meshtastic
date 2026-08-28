@@ -28,6 +28,7 @@ public final class BridgeService extends Service {
     private final Object statusLock = new Object();
     private final Handler main = new Handler(Looper.getMainLooper());
     private BridgeEngine engine;
+    private CompanionApiServer companionApi;
     private String pendingStatus;
     private String lastDeliveredStatus;
     private boolean statusScheduled;
@@ -66,6 +67,9 @@ public final class BridgeService extends Service {
         BridgeEngine current = engine;
         engine = null;
         if (current != null) current.close();
+        CompanionApiServer currentApi = companionApi;
+        companionApi = null;
+        if (currentApi != null) currentApi.close();
         publishStatus("Applying new configuration…");
         startBridge();
     }
@@ -73,6 +77,15 @@ public final class BridgeService extends Service {
     private void startBridge() {
         try {
             BridgeConfig config = BridgeConfig.load(this);
+            try {
+                companionApi = new CompanionApiServer(
+                        CompanionApiServer.DEFAULT_PORT, config, () -> processStatus);
+                companionApi.start();
+            } catch (Exception apiError) {
+                companionApi = null;
+                publishStatus("Companion API unavailable on 127.0.0.1:"
+                        + CompanionApiServer.DEFAULT_PORT + ": " + useful(apiError));
+            }
             engine = new BridgeEngine(this, config, this::publishStatus);
             engine.start();
         } catch (Exception error) {
@@ -142,6 +155,9 @@ public final class BridgeService extends Service {
         BridgeEngine current = engine;
         engine = null;
         if (current != null) current.close();
+        CompanionApiServer currentApi = companionApi;
+        companionApi = null;
+        if (currentApi != null) currentApi.close();
         publishStopped();
         super.onDestroy();
     }

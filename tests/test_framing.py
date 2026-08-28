@@ -1,6 +1,28 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from rns_meshtastic.framing import HEADER, REQUEST_PREFIX, FragmentError, FragmentProtocol
+
+
+def test_port76_binary_vector_is_stable_and_round_trips():
+    vector = json.loads(
+        (Path(__file__).parent / "vectors" / "port76-v1.json").read_text()
+    )
+    frame = bytes.fromhex(vector["frame_hex"])
+    sender = FragmentProtocol(fragment_body=vector["fragment_body"])
+    fragments = sender.encode(frame, vector["destination"])
+
+    assert [item.payload.hex() for item in fragments] == vector["fragments_hex"]
+    assert (REQUEST_PREFIX + HEADER.pack(0, 2)).hex() == vector["repair_second_hex"]
+    assert (REQUEST_PREFIX + HEADER.pack(0, 0)).hex() == vector["repair_final_hex"]
+
+    receiver = FragmentProtocol(fragment_body=vector["fragment_body"])
+    completed = []
+    for item in fragments:
+        completed.extend(receiver.receive(vector["source"], item.payload).frames)
+    assert completed == [frame]
 
 
 def test_round_trip_in_order():

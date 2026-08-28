@@ -90,7 +90,9 @@ public final class MainActivity extends Activity {
 
         TextView explanation = new TextView(this);
         explanation.setText("Local Reticulum TCP server for Sideband/Columba, bound only to 127.0.0.1. "
-                + "Clients may display the local TCP estimate of 10 Mbps; actual radio traffic is paced below.");
+                + "Read-only companion status is on 127.0.0.1:7823. Clients may display the local TCP "
+                + "estimate of 10 Mbps; the real path is constrained LoRa. Realtime calls, continuous "
+                + "audio and guaranteed large-file delivery are not supported.");
         explanation.setPadding(0, dp(6), 0, dp(12));
         form.addView(explanation);
 
@@ -152,6 +154,25 @@ public final class MainActivity extends Activity {
         copyDiagnostics.setOnClickListener(ignored -> copyDiagnostics());
         form.addView(copyDiagnostics);
 
+        LinearLayout configButtons = new LinearLayout(this);
+        configButtons.setOrientation(LinearLayout.HORIZONTAL);
+        Button copyConfig = new Button(this);
+        copyConfig.setText("Copy config");
+        copyConfig.setOnClickListener(ignored -> copyConfiguration());
+        Button importConfig = new Button(this);
+        importConfig.setText("Import config");
+        importConfig.setOnClickListener(ignored -> importConfiguration());
+        configButtons.addView(copyConfig, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        configButtons.addView(importConfig, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        form.addView(configButtons);
+
+        Button safetyCheck = new Button(this);
+        safetyCheck.setText("Check LoRa safety");
+        safetyCheck.setOnClickListener(ignored -> showSafetyCheck());
+        form.addView(safetyCheck);
+
         status = new TextView(this);
         status.setText("Bridge is not running");
         status.setTextIsSelectable(true);
@@ -202,23 +223,38 @@ public final class MainActivity extends Activity {
 
     private void saveAndStart() {
         try {
-            String selectedTransport = selected(transport);
-            BridgeConfig config = new BridgeConfig(
-                    selectedTransport,
-                    selectedTransport.equals("tcp") ? value(radioHost) : "",
-                    selectedTransport.equals("tcp") ? integer(radioPort) : 4403,
-                    selectedTransport.equals("ble") ? value(bleAddress) : "",
-                    integer(localPort), integer(channel), integer(hops), selected(mode), value(gateway),
-                    integer(fragmentBody), integer(txInterval), ackPolicyValue(), value(allowedSources),
-                    selected(mqttForwardingPolicy), selected(trafficProfile));
+            BridgeConfig config = configFromForm();
             if (!ensurePermissions(config)) return;
-            config.save(this);
-            Intent service = new Intent(this, BridgeService.class).setAction(BridgeService.ACTION_START);
-            startForegroundService(service);
-            status.setText("Starting bridge…");
+            List<String> warnings = config.safetyWarnings();
+            if (warnings.isEmpty()) startConfiguredBridge(config);
+            else new AlertDialog.Builder(this)
+                    .setTitle("LoRa safety warnings")
+                    .setMessage(String.join("\n\n", warnings))
+                    .setPositiveButton("Start anyway", (dialog, which) -> startConfiguredBridge(config))
+                    .setNegativeButton("Review settings", null)
+                    .show();
         } catch (Exception error) {
             status.setText("Configuration error: " + (error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage()));
         }
+    }
+
+    private BridgeConfig configFromForm() {
+        String selectedTransport = selected(transport);
+        return new BridgeConfig(
+                selectedTransport,
+                selectedTransport.equals("tcp") ? value(radioHost) : "",
+                selectedTransport.equals("tcp") ? integer(radioPort) : 4403,
+                selectedTransport.equals("ble") ? value(bleAddress) : "",
+                integer(localPort), integer(channel), integer(hops), selected(mode), value(gateway),
+                integer(fragmentBody), integer(txInterval), ackPolicyValue(), value(allowedSources),
+                selected(mqttForwardingPolicy), selected(trafficProfile));
+    }
+
+    private void startConfiguredBridge(BridgeConfig config) {
+        config.save(this);
+        Intent service = new Intent(this, BridgeService.class).setAction(BridgeService.ACTION_START);
+        startForegroundService(service);
+        status.setText("Starting bridge…");
     }
 
     private boolean ensurePermissions(BridgeConfig config) {
@@ -407,6 +443,58 @@ public final class MainActivity extends Activity {
         }
         clipboard.setPrimaryClip(ClipData.newPlainText("Bridge diagnostics", report));
         Toast.makeText(this, "Diagnostics copied", Toast.LENGTH_SHORT).show();
+    }
+
+    private void copyConfiguration() {
+        try {
+            putClipboard("Bridge configuration", configFromForm().exportText());
+            Toast.makeText(this, "Configuration copied (no credentials are included)", Toast.LENGTH_SHORT).show();
+        } catch (Exception error) {
+            status.setText("Configuration error: " + useful(error));
+        }
+    }
+
+    private void importConfiguration() {
+        ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+        if (clipboard == null || !clipboard.hasPrimaryClip()
+                || clipboard.getPrimaryClip() == null
+                || clipboard.getPrimaryClip().getItemCount() == 0) {
+            status.setText("Clipboard does not contain a bridge configuration.");
+            return;
+        }
+        CharSequence text = clipboard.getPrimaryClip().getItemAt(0).coerceToText(this);
+        try {
+            BridgeConfig.importText(text.toString()).save(this);
+            load();
+            status.setText("Configuration imported. Review it, then press Save & start.");
+        } catch (Exception error) {
+            status.setText("Import failed: " + useful(error));
+        }
+    }
+
+    private void showSafetyCheck() {
+        try {
+            List<String> warnings = configFromForm().safetyWarnings();
+            new AlertDialog.Builder(this)
+                    .setTitle(warnings.isEmpty() ? "LoRa safety check passed" : "LoRa safety warnings")
+                    .setMessage(warnings.isEmpty()
+                            ? "No unsafe bridge setting was detected. Meshtastic duty-cycle limits remain authoritative."
+                            : String.join("\n\n", warnings))
+                    .setPositiveButton("OK", null)
+                    .show();
+        } catch (Exception error) {
+            status.setText("Configuration error: " + useful(error));
+        }
+    }
+
+    private void putClipboard(String label, String value) {
+        ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+        if (clipboard == null) throw new IllegalStateException("Clipboard is unavailable");
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, value));
+    }
+
+    private static String useful(Exception error) {
+        return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }

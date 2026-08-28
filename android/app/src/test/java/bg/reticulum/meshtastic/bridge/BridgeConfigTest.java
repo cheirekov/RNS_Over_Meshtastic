@@ -1,6 +1,7 @@
 package bg.reticulum.meshtastic.bridge;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -68,6 +69,34 @@ public class BridgeConfigTest {
         BridgeConfig restricted = autoMultiPeer("!aabbcc11, !11223344");
         assertTrue(restricted.acceptsSource("!11223344"));
         assertFalse(restricted.acceptsSource("!55667788"));
+    }
+
+    @Test public void exportImportRoundTripContainsNoCredentials() {
+        BridgeConfig original = autoSinglePeer();
+        String exported = original.exportText();
+        BridgeConfig restored = BridgeConfig.importText(exported);
+        assertEquals(original.transport, restored.transport);
+        assertEquals(original.mode, restored.mode);
+        assertEquals(original.gateway, restored.gateway);
+        assertEquals(original.txIntervalMillis, restored.txIntervalMillis);
+        assertFalse(exported.toLowerCase().contains("password"));
+        assertFalse(exported.toLowerCase().contains("passphrase"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void companionApiPortCannotBeUsedAsRnsPort() {
+        new BridgeConfig(
+                "tcp", "192.0.2.1", 4403, "", 7823,
+                0, 3, "broadcast", "", 200, 2000, "off", "",
+                "force_off", "constrained_auto");
+    }
+
+    @Test public void riskySettingsProduceOperatorWarnings() {
+        BridgeConfig risky = new BridgeConfig(
+                "tcp", "192.0.2.1", 4403, "", 7822,
+                0, 5, "broadcast", "", 220, 200, "all", "",
+                "inherit", "transparent");
+        assertTrue(risky.safetyWarnings().size() >= 5);
     }
 
     @Test public void criticalAckProtectsFinalAndRepairFragmentsOnly() {

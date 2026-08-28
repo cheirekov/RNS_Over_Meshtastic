@@ -42,6 +42,18 @@ def _integer(
     return value
 
 
+def _float_value(
+    environment: Mapping[str, str], name: str, default: float, minimum: float, maximum: float
+) -> float:
+    try:
+        value = float(_value(environment, name, str(default)))
+    except ValueError as error:
+        raise ValueError(f"{name} must be a number") from error
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
 def _yes_no(environment: Mapping[str, str], name: str, default: str) -> str:
     value = _value(environment, name, default).lower()
     if value not in {"yes", "no"}:
@@ -186,7 +198,66 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
     if forwarding not in {"inherit", "force_off"}:
         raise ValueError("MESHTASTIC_MQTT_FORWARDING_POLICY must be inherit or force_off")
 
+    lora_policy = _value(environment, "RNS_LORA_POLICY", "conservative").lower()
+    if lora_policy not in {"conservative", "balanced", "custom"}:
+        raise ValueError("RNS_LORA_POLICY must be conservative, balanced or custom")
+    policy_defaults = {
+        "conservative": (2.0, 32, 12, 60.0),
+        "balanced": (1.0, 64, 18, 60.0),
+        "custom": (2.0, 32, 12, 60.0),
+    }
+    default_interval, default_queue, default_repairs, default_repair_window = policy_defaults[
+        lora_policy
+    ]
+    tx_interval = _float_value(
+        environment, "RNS_RADIO_TX_INTERVAL", default_interval, 0.25, 60.0
+    )
+    queue_fragments = _integer(
+        environment, "RNS_RADIO_QUEUE_FRAGMENTS", default_queue, 4, 1024
+    )
+    repair_budget = _integer(
+        environment, "RNS_REPAIR_REQUEST_BUDGET", default_repairs, 1, 120
+    )
+    repair_window = _float_value(
+        environment, "RNS_REPAIR_BUDGET_WINDOW", default_repair_window, 10.0, 3600.0
+    )
+
+    discovery = _value(environment, "RNS_PUBLIC_DISCOVERY", "off").lower()
+    if discovery not in {"off", "manual", "trusted_auto"}:
+        raise ValueError("RNS_PUBLIC_DISCOVERY must be off, manual or trusted_auto")
+    discovery_sources = [
+        item.strip().lower()
+        for item in environment.get("RNS_DISCOVERY_SOURCES", "").split(",")
+        if item.strip()
+    ]
+    if any(IDENTITY_HASH.fullmatch(source) is None for source in discovery_sources):
+        raise ValueError("RNS_DISCOVERY_SOURCES must contain 32-character identity hashes")
+    if discovery == "trusted_auto" and not discovery_sources:
+        raise ValueError("trusted_auto discovery requires RNS_DISCOVERY_SOURCES")
+    discovery_max = _integer(environment, "RNS_DISCOVERY_MAX", 1, 1, 8)
+    autoconnect_policy = (
+        "  # autoconnect policy inactive"
+        if discovery != "trusted_auto"
+        else (
+            f"  autoconnect_discovered_interfaces = {discovery_max}\n"
+            "  autoconnect_interface_mode = boundary\n"
+            "  autoconnect_interface_gravity = 0\n"
+            "  autoconnect_announces_to_internal = No"
+        )
+    )
+    discovery_block = (
+        f"  discover_interfaces = {'No' if discovery == 'off' else 'Yes'}\n"
+        f"  interface_discovery_sources = {', '.join(discovery_sources)}\n"
+        "  required_discovery_value = 14\n"
+        f"{autoconnect_policy}"
+    )
+
     private_interface_mode, public_upstream_block = _public_upstream_configuration(environment)
+    if discovery != "off":
+        # Discovery may introduce a public boundary after startup. Keep the
+        # radio private before that happens instead of opening a transient
+        # public-to-LoRa announce path.
+        private_interface_mode = "internal"
     lan_public_visibility = _yes_no(environment, "RNS_LAN_PUBLIC_VISIBILITY", "no")
     lan_interface_mode = (
         "gateway" if lan_public_visibility == "yes" else private_interface_mode
@@ -227,6 +298,12 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
             _integer(environment, "MESHTASTIC_HOP_LIMIT", 3, 0, 7)
         ),
         "MESHTASTIC_MQTT_FORWARDING_POLICY": forwarding,
+        "RNS_LORA_POLICY": lora_policy,
+        "RNS_RADIO_TX_INTERVAL": f"{tx_interval:g}",
+        "RNS_RADIO_QUEUE_FRAGMENTS": str(queue_fragments),
+        "RNS_REPAIR_REQUEST_BUDGET": str(repair_budget),
+        "RNS_REPAIR_BUDGET_WINDOW": f"{repair_window:g}",
+        "RNS_DISCOVERY_BLOCK": discovery_block,
         "RNS_MESH_MODE": mesh_mode,
         "RNS_GATEWAY_ROLE": gateway_role,
         "RNS_GATEWAY_NODE_LINE": _gateway_node(environment, mesh_mode, gateway_role),

@@ -370,6 +370,75 @@ def _traffic_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _gateway_validate(args: argparse.Namespace) -> int:
+    from rns_meshtastic.gateway_config import parse_env_file, redact_environment, validate_gateway_environment
+
+    try:
+        result = validate_gateway_environment(parse_env_file(Path(args.env_file)))
+    except (OSError, ValueError) as error:
+        print(f"invalid gateway configuration: {error}", file=sys.stderr)
+        return 1
+    if args.json:
+        import json
+
+        print(json.dumps({"valid": True, "warnings": result.warnings,
+                          "values": redact_environment(result.values)}, sort_keys=True))
+    else:
+        print("gateway configuration is valid")
+        print(f"policy={result.values.get('RNS_LORA_POLICY', 'conservative')}")
+        print(f"discovery={result.values.get('RNS_PUBLIC_DISCOVERY', 'off')}")
+        for warning in result.warnings:
+            print(f"warning: {warning}")
+    return 0
+
+
+def _gateway_console(args: argparse.Namespace) -> int:
+    from rns_meshtastic.gateway_console import GatewayState, serve
+
+    state = GatewayState(Path(args.config_dir), Path(args.lxmd_dir), Path(args.stage_dir))
+    print(f"Gateway Console listening on http://{args.bind}:{args.port}")
+    try:
+        serve(args.bind, args.port, state)
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+def _gateway_export(args: argparse.Namespace) -> int:
+    from rns_meshtastic.gateway_config import parse_env_file, render_env, validate_gateway_environment
+
+    stage_dir = Path(args.stage_dir).resolve()
+    stage_file = Path(args.stage_file).resolve()
+    if stage_dir not in stage_file.parents:
+        print("stage file must be inside the configured stage directory", file=sys.stderr)
+        return 2
+    try:
+        result = validate_gateway_environment(parse_env_file(stage_file))
+    except (OSError, ValueError) as error:
+        print(f"cannot export stage: {error}", file=sys.stderr)
+        return 1
+    sys.stdout.write(render_env(result.values))
+    return 0
+
+
+def _gateway_apply(args: argparse.Namespace) -> int:
+    from rns_meshtastic.gateway_config import apply_staged_environment
+
+    try:
+        backup = apply_staged_environment(
+            Path(args.stage_file).resolve(),
+            Path(args.target).resolve(),
+            compose_file=Path(args.compose_file).resolve(),
+            health_url=args.health_url,
+            timeout=args.timeout,
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"gateway apply failed and was rolled back: {error}", file=sys.stderr)
+        return 1
+    print(f"gateway configuration applied; backup: {backup}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rns-meshtastic")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -438,6 +507,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="replace the baseline with current counters instead of reporting",
     )
     traffic.set_defaults(func=_traffic_report)
+
+    validate = sub.add_parser(
+        "gateway-validate", help="validate and redact a managed Linux gateway env file"
+    )
+    validate.add_argument("--env-file", required=True)
+    validate.add_argument("--json", action="store_true")
+    validate.set_defaults(func=_gateway_validate)
+
+    console = sub.add_parser(
+        "gateway-console", help="run the unprivileged Linux Gateway Console"
+    )
+    console.add_argument("--bind", default="127.0.0.1")
+    console.add_argument("--port", type=int, default=8787)
+    console.add_argument("--config-dir", default="/data/rns")
+    console.add_argument("--lxmd-dir", default="/data/lxmd")
+    console.add_argument("--stage-dir", default="/data/rns/gateway-staged")
+    console.set_defaults(func=_gateway_console)
+
+    export = sub.add_parser(
+        "gateway-export", help="explicitly export a validated Console stage to stdout"
+    )
+    export.add_argument("--stage-file", required=True)
+    export.add_argument("--stage-dir", default="/data/rns/gateway-staged")
+    export.set_defaults(func=_gateway_export)
+
+    apply = sub.add_parser(
+        "gateway-apply", help="apply a staged env with Compose health rollback"
+    )
+    apply.add_argument("--stage-file", required=True)
+    apply.add_argument("--target", required=True)
+    apply.add_argument("--compose-file", default="compose.linux.yaml")
+    apply.add_argument("--health-url", default="http://127.0.0.1:8787/healthz")
+    apply.add_argument("--timeout", type=float, default=120.0)
+    apply.set_defaults(func=_gateway_apply)
     return parser
 
 

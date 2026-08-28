@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rns-over-meshtastic.invalid/bridge-contract-v1.schema.json",
+  "title": "RNS over Meshtastic bridge contract v1",
+  "$defs": {
+    "trafficCounter": {
+      "type": "object",
+      "required": ["rx_bytes", "tx_bytes", "rx_bps", "tx_bps"],
+      "properties": {
+        "rx_bytes": {"type": "integer", "minimum": 0},
+        "tx_bytes": {"type": "integer", "minimum": 0},
+        "rx_bps": {"type": "number", "minimum": 0},
+        "tx_bps": {"type": "number", "minimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["schema", "implementation", "implementation_version", "rns_tcp_port", "constrained_transport", "realtime_supported", "meshtastic_portnum"],
+      "properties": {
+        "schema": {"const": 1},
+        "implementation": {"type": "string"},
+        "implementation_version": {"type": "string"},
+        "rns_tcp_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "status_api_port": {"type": ["integer", "null"], "minimum": 1, "maximum": 65535},
+        "constrained_transport": {"const": true},
+        "realtime_supported": {"const": false},
+        "maximum_serialized_rns_bytes": {"type": "integer", "minimum": 1},
+        "meshtastic_portnum": {"const": 76},
+        "addressing_modes": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "traffic": {
+      "type": "object",
+      "required": ["schema", "captured_at", "lora", "lan", "public", "propagation"],
+      "properties": {
+        "schema": {"const": 1},
+        "captured_at": {"type": "string", "format": "date-time"},
+        "lora": {"$ref": "#/$defs/trafficCounter"},
+        "lan": {"$ref": "#/$defs/trafficCounter"},
+        "public": {"$ref": "#/$defs/trafficCounter"},
+        "propagation": {"$ref": "#/$defs/trafficCounter"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/capabilities"},
+    {"$ref": "#/$defs/traffic"}
+  ]
+}

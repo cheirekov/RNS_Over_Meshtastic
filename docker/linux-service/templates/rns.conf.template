@@ -2,6 +2,7 @@
   enable_transport = Yes
   share_instance = Yes
   instance_name = meshtastic-linux-service
+$RNS_DISCOVERY_BLOCK
 
 [logging]
   loglevel = $RNS_LOGLEVEL
@@ -19,9 +20,11 @@
     channel_index = $MESHTASTIC_CHANNEL_INDEX
     hop_limit = $MESHTASTIC_HOP_LIMIT
     mqtt_forwarding_policy = $MESHTASTIC_MQTT_FORWARDING_POLICY
-    tx_interval = 2.0
-    repair_request_budget = 12
-    repair_budget_window = 60.0
+    tx_interval = $RNS_RADIO_TX_INTERVAL
+    max_queued_fragments = $RNS_RADIO_QUEUE_FRAGMENTS
+    repair_request_budget = $RNS_REPAIR_REQUEST_BUDGET
+    repair_budget_window = $RNS_REPAIR_BUDGET_WINDOW
+    telemetry_file = /data/rns/meshtastic-telemetry.json
 
     mesh_mode = $RNS_MESH_MODE
     gateway_role = $RNS_GATEWAY_ROLE

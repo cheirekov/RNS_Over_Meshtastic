@@ -1,5 +1,8 @@
 # Optional Linux transport and LXMF propagation service
 
+For the 0.3.0 operator UI, policy profiles, metrics and explicit staged
+apply/rollback workflow, see [GATEWAY_CONSOLE.md](GATEWAY_CONSOLE.md).
+
 This profile runs two separate processes without installing RNS, LXMF or the
 Meshtastic Python library on the host:
 

@@ -12,7 +12,7 @@ COPY --from=uv /uv /uvx /usr/local/bin/
 WORKDIR /opt/rns-meshtastic/app
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
-RUN uv sync --frozen --extra propagation --no-dev --no-editable \
+RUN uv sync --frozen --extra propagation --extra console --no-dev --no-editable \
     && rm -rf /root/.cache/uv
 
 COPY docker/linux-service/templates /opt/rns-meshtastic/templates

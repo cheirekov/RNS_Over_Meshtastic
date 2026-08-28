@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import itertools
+import json
 import os
 import queue
+import tempfile
 import threading
+import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import RNS
@@ -80,6 +85,8 @@ class RNSMeshtasticInterface(Interface):
         self.allowed_nodes = _node_set(_optional(config, "allowed_nodes"))
         self.max_peers = _int(config, "max_peers", 32)
         self.tx_interval = _float(config, "tx_interval", 1.0)
+        self.max_queued_fragments = _int(config, "max_queued_fragments", 32)
+        self.telemetry_file = _optional(config, "telemetry_file")
         self.accept_broadcast_on_hub = self.mesh_mode == "auto_multi_peer" or _bool(
             config, "accept_broadcast_on_hub", False
         )
@@ -99,8 +106,28 @@ class RNSMeshtasticInterface(Interface):
         self._peer_lock = threading.RLock()
         self._finalized = False
         self._pending_inbound: list[tuple[str, str, bytes]] = []
-        self._tx_queue: queue.PriorityQueue[_QueuedTransmission] = queue.PriorityQueue(maxsize=1024)
+        self._tx_queue: queue.PriorityQueue[_QueuedTransmission] = queue.PriorityQueue(
+            maxsize=self.max_queued_fragments
+        )
+        self._queue_admission_lock = threading.Lock()
         self._tx_sequence = itertools.count()
+        self._telemetry_lock = threading.Lock()
+        self._telemetry_last_write = 0.0
+        self._telemetry = {
+            "tx_frames_accepted": 0,
+            "tx_frames_rejected": 0,
+            "tx_fragments": 0,
+            "tx_fragment_bytes": 0,
+            "rx_fragments": 0,
+            "rx_fragment_bytes": 0,
+            "rx_frames": 0,
+            "rx_frame_bytes": 0,
+            "repair_transmissions": 0,
+            "retransmissions": 0,
+            "backend_up": 0,
+            "backend_down": 0,
+            "send_failures": 0,
+        }
         self._stop = threading.Event()
         self._backend_online = threading.Event()
         self._worker = threading.Thread(target=self._tx_loop, name=f"{self.name}-tx", daemon=True)
@@ -130,6 +157,8 @@ class RNSMeshtasticInterface(Interface):
             raise ValueError("gateway_role=hub is required for auto_multi_peer")
         if not 1 <= self.max_peers <= 512:
             raise ValueError("max_peers must be between 1 and 512")
+        if not 4 <= self.max_queued_fragments <= 1024:
+            raise ValueError("max_queued_fragments must be between 4 and 1024")
         if self.tx_interval < 0:
             raise ValueError("tx_interval cannot be negative")
 
@@ -216,11 +245,22 @@ class RNSMeshtasticInterface(Interface):
             return
         try:
             transmissions = self.protocol.encode(bytes(data), destination)
-            for transmission in transmissions:
-                self._put_tx(transmission, priority=10)
+            self._put_frame(transmissions, priority=10)
+            self._telemetry["tx_frames_accepted"] += 1
             self.txb += len(data)
         except (FragmentError, queue.Full) as exc:
+            self._telemetry["tx_frames_rejected"] += 1
             RNS.log(f"{self}: could not queue outbound frame: {exc}", RNS.LOG_ERROR)
+        finally:
+            self._write_telemetry()
+
+    def _put_frame(self, transmissions: list[Transmission], *, priority: int) -> None:
+        with self._queue_admission_lock:
+            if self._tx_queue.qsize() + len(transmissions) > self.max_queued_fragments:
+                raise queue.Full("complete Reticulum frame exceeds available LoRa queue capacity")
+            for transmission in transmissions:
+                item = _QueuedTransmission(priority, next(self._tx_sequence), transmission)
+                self._tx_queue.put_nowait(item)
 
     def _put_tx(self, transmission: Transmission, *, priority: int) -> None:
         item = _QueuedTransmission(priority, next(self._tx_sequence), transmission)
@@ -239,10 +279,18 @@ class RNSMeshtasticInterface(Interface):
                 if self._stop.is_set():
                     return
                 self.backend.send(item.transmission.payload, item.transmission.destination)
+                self._telemetry["tx_fragments"] += 1
+                self._telemetry["tx_fragment_bytes"] += len(item.transmission.payload)
+                if item.transmission.reason == "request":
+                    self._telemetry["repair_transmissions"] += 1
+                elif item.transmission.reason == "retransmit":
+                    self._telemetry["retransmissions"] += 1
+                self._write_telemetry()
                 if self.tx_interval:
                     self._stop.wait(self.tx_interval)
                 self._queue_due_repairs()
             except Exception as exc:
+                self._telemetry["send_failures"] += 1
                 RNS.log(f"{self}: TX failed, packet returned to queue: {exc}", RNS.LOG_WARNING)
                 if not self._stop.wait(2.0):
                     try:
@@ -269,13 +317,16 @@ class RNSMeshtasticInterface(Interface):
             for peer in self.spawned_interfaces:
                 peer.online = online
         if online:
+            self._telemetry["backend_up"] += 1
             self._backend_online.set()
             self.local_node_id = self.backend.local_node_id
             RNS.log(f"{self}: transport connected", RNS.LOG_NOTICE)
         else:
+            self._telemetry["backend_down"] += 1
             self._backend_online.clear()
             if detail:
                 RNS.log(f"{self}: transport offline: {detail}", RNS.LOG_WARNING)
+        self._write_telemetry(force=True)
 
     def _on_backend_packet(self, source: str, destination: str, payload: bytes) -> None:
         if not self._finalized:
@@ -301,6 +352,8 @@ class RNSMeshtasticInterface(Interface):
                     valid_destinations.add(BROADCAST_ID)
                 if destination not in valid_destinations:
                     return
+        self._telemetry["rx_fragments"] += 1
+        self._telemetry["rx_fragment_bytes"] += len(payload)
         try:
             result = self.protocol.receive(
                 source, payload, allow_control=not self._tx_queue.full()
@@ -326,6 +379,9 @@ class RNSMeshtasticInterface(Interface):
             else:
                 self.rxb += len(frame)
                 self.owner.inbound(frame, self)
+            self._telemetry["rx_frames"] += 1
+            self._telemetry["rx_frame_bytes"] += len(frame)
+        self._write_telemetry()
 
     def _get_or_create_peer(self, source: str) -> MeshtasticPeerInterface | None:
         with self._peer_lock:
@@ -394,10 +450,65 @@ class RNSMeshtasticInterface(Interface):
         self._stop.set()
         self._backend_online.set()
         self.backend.close()
+        self._write_telemetry(force=True)
         with self._peer_lock:
             peers = list(self.spawned_interfaces)
         for peer in peers:
             peer.detach()
+
+    def _write_telemetry(self, *, force: bool = False) -> None:
+        if not self.telemetry_file:
+            return
+        now = time.monotonic()
+        if not force and now - self._telemetry_last_write < 1.0:
+            return
+        if not self._telemetry_lock.acquire(blocking=False):
+            return
+        try:
+            self._telemetry_last_write = now
+            target = Path(self.telemetry_file)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            peers = []
+            with self._peer_lock:
+                for peer in self.spawned_interfaces:
+                    peers.append(
+                        {
+                            "node_id": peer.peer_node,
+                            "rx_bytes": int(peer.rxb),
+                            "tx_bytes": int(peer.txb),
+                            "online": bool(peer.online),
+                        }
+                    )
+            value = {
+                "schema": 1,
+                "captured_at": datetime.now(UTC).isoformat(),
+                "interface": self.name,
+                "online": bool(self.online),
+                "local_node_id": self.local_node_id,
+                "transport": self.transport_kind,
+                "mesh_mode": self.mesh_mode,
+                "gateway_role": self.gateway_role,
+                "tx_interval": self.tx_interval,
+                "queue": {
+                    "fragments": self._tx_queue.qsize(),
+                    "limit": self.max_queued_fragments,
+                },
+                "counters": dict(self._telemetry),
+                "reassembly": self.protocol.telemetry(),
+                "peers": peers,
+            }
+            with tempfile.NamedTemporaryFile(
+                "w", dir=target.parent, delete=False, encoding="utf-8"
+            ) as handle:
+                json.dump(value, handle, sort_keys=True)
+                handle.write("\n")
+                temporary = Path(handle.name)
+            temporary.chmod(0o600)
+            temporary.replace(target)
+        except OSError as error:
+            RNS.log(f"{self}: could not write telemetry: {error}", RNS.LOG_WARNING)
+        finally:
+            self._telemetry_lock.release()
 
     @staticmethod
     def should_ingress_limit() -> bool:

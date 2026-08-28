@@ -110,6 +110,24 @@ def test_lan_public_visibility_keeps_radio_internal_and_makes_lan_gateway(
     assert "announces_from_internal = No" in public
 
 
+def test_trusted_discovery_is_boundary_only_and_keeps_radio_internal(tmp_path: Path) -> None:
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    values = environment() | {
+        "RNS_PUBLIC_DISCOVERY": "trusted_auto",
+        "RNS_DISCOVERY_SOURCES": "0123456789abcdef0123456789abcdef",
+        "RNS_DISCOVERY_MAX": "2",
+    }
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    radio, lan = config.split("  [[LAN VPN Reticulum clients]]", maxsplit=1)
+    assert "discover_interfaces = Yes" in config
+    assert "autoconnect_discovered_interfaces = 2" in config
+    assert "autoconnect_interface_mode = boundary" in config
+    assert "autoconnect_announces_to_internal = No" in config
+    assert "mode = internal" in radio
+    assert "mode = internal" in lan
+
+
 @pytest.mark.parametrize("visibility", ["true", "1", "enabled", "maybe"])
 def test_rejects_invalid_lan_public_visibility(visibility: str) -> None:
     values = environment() | {"RNS_LAN_PUBLIC_VISIBILITY": visibility}

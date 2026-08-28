@@ -8,6 +8,13 @@ the Meshtastic Android app is not required.
 The bridge is intentionally loopback-only. Sideband or Columba runs on the
 same phone and connects to it as a normal Reticulum TCP client.
 
+Version 0.3.0 adds a read-only companion API on `127.0.0.1:7823` so clients can
+identify the real constrained LoRa path instead of interpreting the local TCP
+hop as 10 Mbps. It also adds copy/import of non-secret configuration, explicit
+LoRa safety warnings, the `rnsmeshtastic://settings` deep link and frozen port
+76 interoperability vectors. Transport framing, multi-peer routing and
+scheduler behavior remain unchanged from 0.2.2.
+
 Version 0.1.8 reports both bridge directions, the last accepted Meshtastic
 peer/path metadata and optional per-fragment Meshtastic routing ACK/NAK. A
 radio ACK is diagnostic information for one Meshtastic packet; it is not an
@@ -185,6 +192,34 @@ The APK is written to:
 ```text
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
+
+## Signed release build
+
+Never commit a keystore or passwords. Mount/provide the keystore to the build
+environment and set all four variables:
+
+```bash
+export ANDROID_KEYSTORE_FILE=/secure/path/rns-meshtastic-release.jks
+export ANDROID_KEYSTORE_PASSWORD='...'
+export ANDROID_KEY_ALIAS='rns-meshtastic'
+export ANDROID_KEY_PASSWORD='...'
+cd android
+docker compose run --rm \
+  -v "$ANDROID_KEYSTORE_FILE:/run/secrets/release.jks:ro" \
+  -e ANDROID_KEYSTORE_FILE=/run/secrets/release.jks \
+  -e ANDROID_KEYSTORE_PASSWORD \
+  -e ANDROID_KEY_ALIAS \
+  -e ANDROID_KEY_PASSWORD \
+  android-build gradle --no-daemon testDebugUnitTest assembleRelease
+```
+
+The resulting APK is `app/build/outputs/apk/release/app-release.apk`. Keep the
+same key for upgrades. Before rollout, retain the last signed APK, export the
+bridge configuration, install 0.3.0 over 0.2.2 and verify that settings and
+identity-bearing client data are unchanged. Rollback is installation of the
+previous APK signed with the same key; Android does not allow a lower
+`versionCode`, so a rollback build must use a higher code or the app must be
+uninstalled (which removes app settings).
 
 Compose keeps Gradle's debug signing keystore in the
 `android-debug-signing` Docker volume. Keep that volume to install later debug

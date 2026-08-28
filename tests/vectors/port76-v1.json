@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "name": "legacy-three-fragment-frame",
+  "fragment_body": 8,
+  "destination": "!aabbcc11",
+  "source": "!11223344",
+  "frame_hex": "000102030405060708090a0b0c0d0e0f10111213",
+  "fragments_hex": [
+    "00010001020304050607",
+    "000208090a0b0c0d0e0f",
+    "00fd10111213"
+  ],
+  "repair_second_hex": "5245510002",
+  "repair_final_hex": "5245510000"
+}

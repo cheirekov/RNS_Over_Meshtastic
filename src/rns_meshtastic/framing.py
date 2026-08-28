@@ -137,6 +137,33 @@ class FragmentProtocol:
         with self._lock:
             self._cleanup_locked()
 
+    def telemetry(self) -> dict[str, int]:
+        """Return bounded, secret-free protocol state for operator telemetry."""
+
+        with self._lock:
+            self._cleanup_locked()
+            missing = 0
+            awaiting_final = 0
+            for assembly in self._assemblies.values():
+                if assembly.final_position is None:
+                    awaiting_final += 1
+                else:
+                    missing += sum(
+                        1
+                        for position in range(1, assembly.final_position + 1)
+                        if position not in assembly.fragments
+                    )
+            return {
+                "active_assemblies": len(self._assemblies),
+                "awaiting_final": awaiting_final,
+                "missing_fragments": missing,
+                "cached_transmissions": len(self._tx_cache),
+                "repair_requests": self.repair_requests,
+                "repair_throttled": self.repair_throttled,
+                "repair_budget_used": len(self._repair_request_times),
+                "repair_budget_limit": self.max_repair_requests_per_window,
+            }
+
     def poll_repairs(self, max_requests: int = 1, *, allow_control: bool = True) -> ReceiveResult:
         """Request stalled fragments with bounded exponential backoff."""
         if max_requests <= 0:
