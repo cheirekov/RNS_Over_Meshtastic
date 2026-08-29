@@ -48,6 +48,16 @@ def status() -> dict:
                 "txs": 7,
             },
             {
+                "type": "BackboneClientInterface",
+                "name": "BackboneInterface[Private boundary 1/private.example:4242]",
+                "short_name": "Private boundary 1",
+                "rxb": 25,
+                "txb": 15,
+                "rxs": 1,
+                "txs": 2,
+                "status": True,
+            },
+            {
                 "type": "TCPClientInterface",
                 "short_name": "Client on LAN VPN Reticulum clients",
                 "parent_interface_name": "TCPServerInterface[LAN VPN Reticulum clients/0.0.0.0:4242]",
@@ -63,6 +73,7 @@ def test_summary_does_not_double_count_dynamic_radio_tx_or_tcp_children() -> Non
     assert summary["lora"] == {"rx": 47, "tx": 100, "rxs": 4.0, "txs": 2.0}
     assert summary["public"] == {"rx": 200, "tx": 50, "rxs": 4.0, "txs": 5.0}
     assert summary["private_tcp"] == {"rx": 300, "tx": 400, "rxs": 6.0, "txs": 7.0}
+    assert summary["private_upstream"] == {"rx": 25, "tx": 15, "rxs": 1.0, "txs": 2.0}
     assert summary["radio_parent_count"] == 1
     assert summary["radio_peer_count"] == 1
 

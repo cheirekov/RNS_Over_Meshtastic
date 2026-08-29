@@ -95,6 +95,65 @@ def test_public_upstreams_render_as_boundaries_and_make_private_interfaces_inter
     assert config.count("announces_from_internal = No") == 2
 
 
+def test_private_upstreams_require_and_render_dedicated_ifac(tmp_path: Path) -> None:
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    values = environment() | {
+        "RNS_PRIVATE_UPSTREAMS": "private.example:4242",
+        "RNS_PRIVATE_UPSTREAM_IFAC_NAME": "trusted-backbone",
+        "RNS_PRIVATE_UPSTREAM_IFAC_PASSPHRASE": "separate-private-secret",
+    }
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    private = config.split("[[Private boundary 1]]", maxsplit=1)[1]
+    assert "mode = boundary" in private
+    assert "announces_from_internal = No" in private
+    assert "network_name = trusted-backbone" in private
+    assert "passphrase = separate-private-secret" in private
+
+
+def test_private_upstream_without_ifac_is_rejected() -> None:
+    with pytest.raises(ValueError, match="private upstreams require"):
+        configuration_values(environment() | {"RNS_PRIVATE_UPSTREAMS": "private.example:4242"})
+
+
+def test_bootstrap_upstream_must_be_subset_and_use_trusted_discovery(tmp_path: Path) -> None:
+    values = environment() | {
+        "RNS_PUBLIC_UPSTREAMS": "seed.example:4242,other.example:4242",
+        "RNS_PUBLIC_BOOTSTRAP_UPSTREAMS": "seed.example:4242",
+        "RNS_PUBLIC_DISCOVERY": "trusted_auto",
+        "RNS_DISCOVERY_SOURCES": "0123456789abcdef0123456789abcdef",
+    }
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    seed, other = config.split("[[Public boundary 2]]", maxsplit=1)
+    assert "bootstrap_only = Yes" in seed
+    assert "bootstrap_only = No" in other
+
+    with pytest.raises(ValueError, match="trusted_auto"):
+        configuration_values(values | {"RNS_PUBLIC_DISCOVERY": "off"})
+    with pytest.raises(ValueError, match="subset"):
+        configuration_values(
+            values | {"RNS_PUBLIC_BOOTSTRAP_UPSTREAMS": "missing.example:4242"}
+        )
+
+
+def test_discovery_tuning_and_probe_response_are_rendered(tmp_path: Path) -> None:
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    values = environment() | {
+        "RNS_PUBLIC_DISCOVERY": "trusted_auto",
+        "RNS_DISCOVERY_SOURCES": "0123456789abcdef0123456789abcdef",
+        "RNS_DISCOVERY_REQUIRED_VALUE": "18",
+        "RNS_DISCOVERY_GRAVITY": "-2",
+        "RNS_RESPOND_TO_PROBES": "yes",
+    }
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    assert "required_discovery_value = 18" in config
+    assert "autoconnect_interface_gravity = -2" in config
+    assert "respond_to_probes = Yes" in config
+
+
 def test_lan_public_visibility_keeps_radio_internal_and_makes_lan_gateway(
     tmp_path: Path,
 ) -> None:

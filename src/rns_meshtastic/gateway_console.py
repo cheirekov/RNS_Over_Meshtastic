@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import difflib
+import hmac
 import io
 import json
 import os
@@ -74,7 +76,9 @@ def _empty_traffic() -> dict[str, Any]:
         "lora": {},
         "private_tcp": {},
         "public": {},
+        "private_upstream": {},
         "public_interfaces": {},
+        "private_interfaces": {},
         "private_tcp_client_count": 0,
     }
 
@@ -206,6 +210,8 @@ class GatewayState:
         self._previous_telemetry_counters: dict[str, int] = {}
         self._previous_reassembly: dict[str, int] = {}
         self._previous_peers: set[str] = set()
+        self._seen_announce_observations: deque[str] = deque()
+        self._seen_announce_keys: set[str] = set()
         self._transient_alerts: dict[str, tuple[float, BridgeAlertV1]] = {}
         self._radio_disconnect_times: deque[float] = deque()
         self._missing_since: float | None = None
@@ -271,6 +277,9 @@ class GatewayState:
             alerts.append(BridgeAlertV1("error", "meshtastic_offline", "Meshtastic transport is offline"))
 
         enhanced_upstreams = self._observe_upstreams(traffic.get("public_interfaces", {}))
+        enhanced_private_upstreams = self._observe_upstreams(
+            traffic.get("private_interfaces", {}), source="private"
+        )
         for name, upstream in enhanced_upstreams.items():
             if not upstream.get("up"):
                 alerts.append(BridgeAlertV1("warning", "public_upstream_down", f"{name} is down"))
@@ -279,6 +288,17 @@ class GatewayState:
                     BridgeAlertV1(
                         "warning",
                         "public_upstream_flapping",
+                        f"{name} changed state at least three times in ten minutes",
+                    )
+                )
+        for name, upstream in enhanced_private_upstreams.items():
+            if not upstream.get("up"):
+                alerts.append(BridgeAlertV1("warning", "private_upstream_down", f"{name} is down"))
+            if upstream.get("flapping"):
+                alerts.append(
+                    BridgeAlertV1(
+                        "warning",
+                        "private_upstream_flapping",
                         f"{name} changed state at least three times in ten minutes",
                     )
                 )
@@ -298,6 +318,7 @@ class GatewayState:
             )
 
         self._observe_telemetry(telemetry, collector_error)
+        self._observe_announces(telemetry)
         alerts.extend(self._active_transient_alerts())
         reassembly = telemetry.get("reassembly") if isinstance(telemetry.get("reassembly"), dict) else {}
         missing = int(reassembly.get("missing_fragments", 0) or 0)
@@ -354,15 +375,29 @@ class GatewayState:
                 source=str(propagation.get("source", "unavailable")),
             ),
         )
+        traffic_snapshot = to_dict(snapshot)
+        traffic_snapshot["private_upstream"] = to_dict(
+            _counter(traffic.get("private_upstream"), source="rnstatus.rns_payload")
+        )
+        recent_announces = telemetry.get("recent_announces", [])
+        if not isinstance(recent_announces, list):
+            recent_announces = []
         return to_dict(status) | {
-            "traffic": to_dict(snapshot),
+            "traffic": traffic_snapshot,
             "lan_client_count": int(traffic.get("private_tcp_client_count", 0) or 0),
             "queue_pressure_percent": round(queue_pressure * 100, 1),
             "meshtastic": telemetry,
             "public_interfaces": enhanced_upstreams,
+            "private_interfaces": enhanced_private_upstreams,
             "lxmd": lxmd,
             "discovery": self._safe_discovery(),
             "routes": routes,
+            "recent_announces": recent_announces[-64:],
+            "announce_observability": telemetry.get(
+                "announce_observability",
+                {"header_visibility": "unavailable", "payloads_recorded": False},
+            ),
+            "radio_peer_ready": bool(peers_list),
         }
 
     def _safe_discovery(self) -> list[dict[str, Any]]:
@@ -464,7 +499,9 @@ class GatewayState:
                     )
                 self._last_collector_error = collector_error
 
-    def _observe_upstreams(self, upstreams: dict[str, Any]) -> dict[str, Any]:
+    def _observe_upstreams(
+        self, upstreams: dict[str, Any], *, source: str = "public"
+    ) -> dict[str, Any]:
         wall_now = captured_at()
         monotonic_now = time.monotonic()
         enhanced: dict[str, Any] = {}
@@ -473,7 +510,8 @@ class GatewayState:
                 value = dict(raw) if isinstance(raw, dict) else {}
                 up = bool(value.get("up"))
                 counters = (int(value.get("rx", 0) or 0), int(value.get("tx", 0) or 0))
-                observed = self._upstream_observations.get(name)
+                observation_key = f"{source}:{name}"
+                observed = self._upstream_observations.get(observation_key)
                 if observed is None:
                     observed = {
                         "up": up,
@@ -486,7 +524,7 @@ class GatewayState:
                         "counters": counters,
                         "changes": deque(),
                     }
-                    self._upstream_observations[name] = observed
+                    self._upstream_observations[observation_key] = observed
                 elif observed["up"] != up:
                     if up:
                         observed["reconnects"] += 1
@@ -494,9 +532,9 @@ class GatewayState:
                     observed["last_state_change_at"] = wall_now
                     observed["changes"].append(monotonic_now)
                     self.events.append(
-                        "public",
+                        source,
                         "info" if up else "warning",
-                        "public_upstream_up" if up else "public_upstream_down",
+                        f"{source}_upstream_up" if up else f"{source}_upstream_down",
                         f"{name} is {'up' if up else 'down'}",
                     )
                 while observed["changes"] and observed["changes"][0] < monotonic_now - 600:
@@ -518,6 +556,35 @@ class GatewayState:
                     "latency_ms": None,
                 }
         return enhanced
+
+    def _observe_announces(self, telemetry: dict[str, Any]) -> None:
+        observations = telemetry.get("recent_announces", [])
+        if not isinstance(observations, list):
+            return
+        with self._lock:
+            for item in observations:
+                if not isinstance(item, dict):
+                    continue
+                key = "|".join(
+                    str(item.get(name, ""))
+                    for name in ("captured_at", "direction", "meshtastic_peer", "destination_hash")
+                )
+                if not key or key in self._seen_announce_keys:
+                    continue
+                self._seen_announce_keys.add(key)
+                self._seen_announce_observations.append(key)
+                while len(self._seen_announce_observations) > 256:
+                    oldest = self._seen_announce_observations.popleft()
+                    self._seen_announce_keys.discard(oldest)
+                direction = str(item.get("direction", "unknown"))
+                peer = str(item.get("meshtastic_peer", "unknown"))
+                destination = str(item.get("destination_hash", "unknown"))
+                self.events.append(
+                    "rns",
+                    "info",
+                    "announce_to_mesh" if direction == "to_mesh" else "announce_from_mesh",
+                    f"RNS announce {direction} via {peer} for {destination}",
+                )
 
     def _set_transient(self, alert: BridgeAlertV1) -> None:
         self._transient_alerts[alert.code] = (time.monotonic() + TRANSIENT_ALERT_SECONDS, alert)
@@ -597,7 +664,7 @@ def _prometheus(status: dict[str, Any]) -> str:
         "# TYPE rns_meshtastic_bridge_up gauge",
         f"rns_meshtastic_bridge_up {1 if status.get('running') else 0}",
     ]
-    for network in ("lora", "lan", "public", "propagation"):
+    for network in ("lora", "lan", "public", "private_upstream", "propagation"):
         counter = traffic[network]
         available = 1 if counter.get("available", True) else 0
         lines.append(f'rns_meshtastic_traffic_available{{network="{network}"}} {available}')
@@ -628,7 +695,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         super().log_message(format, *args)
 
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
+    def _send(
+        self,
+        status: int,
+        body: bytes,
+        content_type: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -640,6 +714,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             "Content-Security-Policy",
             "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
         )
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -649,15 +725,19 @@ class ConsoleHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
+        if path != "/healthz" and not self._require_authentication():
+            return
         try:
-            if path == "/":
+            if path == "/healthz":
+                status = self.state.status()
+                response_status = 200 if status.get("running") else 503
+                self._json(response_status, {"status": "ok" if response_status == 200 else "unavailable"})
+            elif path == "/":
                 self._send(200, INDEX_HTML.encode(), "text/html; charset=utf-8")
             elif path == "/api/v1/capabilities":
                 self._json(200, _capabilities())
-            elif path in {"/api/v1/status", "/healthz"}:
-                status = self.state.status()
-                response_status = 200 if path != "/healthz" or status.get("running") else 503
-                self._json(response_status, status)
+            elif path == "/api/v1/status":
+                self._json(200, self.state.status())
             elif path == "/api/v1/config":
                 self._json(200, {"schema": 1, "values": self.state.public_environment()})
             elif path == "/api/v1/config/schema":
@@ -689,6 +769,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if not self._require_authentication():
+            return
         if path not in {"/api/v1/config/validate", "/api/v1/config/stage", "/api/v1/lxmd/announce"}:
             self._json(404, {"error": "not found"})
             return
@@ -728,8 +810,46 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         parsed = urlparse(origin)
         return parsed.scheme in {"http", "https"} and parsed.netloc == self.headers.get("Host")
 
+    def _require_authentication(self) -> bool:
+        mode = str(getattr(self.server, "console_auth_mode", "off"))
+        if mode == "off":
+            return True
+        supplied = self.headers.get("Authorization", "")
+        expected_username = str(getattr(self.server, "console_username", ""))
+        expected_password = str(getattr(self.server, "console_password", ""))
+        valid = False
+        if supplied.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(supplied[6:], validate=True).decode("utf-8")
+                username, password = decoded.split(":", 1)
+                valid = hmac.compare_digest(username, expected_username) and hmac.compare_digest(
+                    password, expected_password
+                )
+            except (ValueError, UnicodeDecodeError):
+                valid = False
+        if valid:
+            return True
+        self._send(
+            401,
+            json.dumps({"error": "authentication required"}).encode(),
+            "application/json",
+            headers={"WWW-Authenticate": 'Basic realm="RNS Gateway Console", charset="UTF-8"'},
+        )
+        return False
 
-def serve(bind: str, port: int, state: GatewayState) -> None:
+
+def serve(
+    bind: str,
+    port: int,
+    state: GatewayState,
+    *,
+    auth_mode: str = "off",
+    username: str = "",
+    password: str = "",
+) -> None:
     server = ThreadingHTTPServer((bind, port), ConsoleHandler)
     server.gateway_state = state  # type: ignore[attr-defined]
+    server.console_auth_mode = auth_mode  # type: ignore[attr-defined]
+    server.console_username = username  # type: ignore[attr-defined]
+    server.console_password = password  # type: ignore[attr-defined]
     server.serve_forever()

@@ -14,6 +14,11 @@ from rns_meshtastic.gateway_config import (
 )
 
 
+def test_example_environment_documents_every_managed_setting() -> None:
+    example = Path(__file__).parents[1] / "examples" / "linux-service.env.example"
+    assert tuple(parse_env_file(example)) == MANAGED_FIELDS
+
+
 def environment() -> dict[str, str]:
     return {
         "MESHTASTIC_TCP_HOST": "192.0.2.10",
@@ -57,6 +62,40 @@ def test_trusted_discovery_requires_allowlisted_identity():
 def test_duty_cycle_override_is_always_rejected():
     with pytest.raises(ValueError, match="duty-cycle override"):
         validate_gateway_environment(environment() | {"MESHTASTIC_OVERRIDE_DUTY_CYCLE": "yes"})
+
+
+def test_console_authentication_is_mandatory_outside_loopback():
+    with pytest.raises(ValueError, match="required when Console is published outside loopback"):
+        validate_gateway_environment(
+            environment()
+            | {
+                "RNS_CONSOLE_PUBLISH_IP": "172.16.19.10",
+                "RNS_CONSOLE_AUTH_MODE": "off",
+            }
+        )
+
+    result = validate_gateway_environment(
+        environment()
+        | {
+            "RNS_CONSOLE_PUBLISH_IP": "172.16.19.10",
+            "RNS_CONSOLE_AUTH_MODE": "basic",
+            "RNS_CONSOLE_USERNAME": "operator",
+            "RNS_CONSOLE_PASSWORD": "correct-horse-battery-staple",
+        }
+    )
+    assert result.values["RNS_CONSOLE_AUTH_MODE"] == "basic"
+
+
+def test_console_basic_auth_rejects_short_password():
+    with pytest.raises(ValueError, match="at least 16"):
+        validate_gateway_environment(
+            environment()
+            | {
+                "RNS_CONSOLE_AUTH_MODE": "basic",
+                "RNS_CONSOLE_USERNAME": "operator",
+                "RNS_CONSOLE_PASSWORD": "too-short",
+            }
+        )
 
 
 def test_secrets_are_redacted_but_staged_file_is_private(tmp_path: Path):

@@ -1,4 +1,17 @@
-# Roadmap след 0.4.0
+# Roadmap след 0.5.0
+
+## Завършено в Linux Console 0.5.0
+
+- Basic authentication е задължителна при non-loopback publishing; health
+  endpoint-ът остава минимален и без secrets.
+- Structured Add/Remove public и private upstream-и, отделен private IFAC и
+  отделни counters/status за private boundaries.
+- Public/private bootstrap subsets за allowlisted `trusted_auto` discovery,
+  configurable stamp value, gravity и opt-in probe response.
+- Header-only LoRa announce observability и ясно състояние преди да бъде научен
+  първият dynamic Meshtastic peer; IFAC ciphertext остава изрично opaque.
+
+Android остава 0.4.0; transport, scheduler и repair алгоритмите не са променяни.
 
 ## Завършено в 0.4.0
 

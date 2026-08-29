@@ -9,6 +9,7 @@ import queue
 import tempfile
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from RNS.Interfaces.Interface import Interface
 
 from rns_meshtastic.addresses import BROADCAST_ID, format_node_id
 from rns_meshtastic.framing import FragmentError, FragmentProtocol, Transmission
+from rns_meshtastic.rns_metadata import is_opaque_ifac, parse_rns_frame
 from rns_meshtastic.transports import MqttBackend, MqttConfig, NativeBackend, NativeConfig
 
 
@@ -127,7 +129,10 @@ class RNSMeshtasticInterface(Interface):
             "backend_up": 0,
             "backend_down": 0,
             "send_failures": 0,
+            "opaque_ifac_frames": 0,
         }
+        self._observation_lock = threading.Lock()
+        self._recent_announces: deque[dict[str, Any]] = deque(maxlen=64)
         self._stop = threading.Event()
         self._backend_online = threading.Event()
         self._worker = threading.Thread(target=self._tx_loop, name=f"{self.name}-tx", daemon=True)
@@ -248,6 +253,7 @@ class RNSMeshtasticInterface(Interface):
             self._put_frame(transmissions, priority=10)
             self._telemetry["tx_frames_accepted"] += 1
             self.txb += len(data)
+            self._observe_rns_frame("to_mesh", bytes(data), destination)
         except (FragmentError, queue.Full) as exc:
             self._telemetry["tx_frames_rejected"] += 1
             RNS.log(f"{self}: could not queue outbound frame: {exc}", RNS.LOG_ERROR)
@@ -379,6 +385,7 @@ class RNSMeshtasticInterface(Interface):
             else:
                 self.rxb += len(frame)
                 self.owner.inbound(frame, self)
+            self._observe_rns_frame("from_mesh", frame, source)
             self._telemetry["rx_frames"] += 1
             self._telemetry["rx_frame_bytes"] += len(frame)
         self._write_telemetry()
@@ -479,6 +486,8 @@ class RNSMeshtasticInterface(Interface):
                             "online": bool(peer.online),
                         }
                     )
+            with self._observation_lock:
+                recent_announces = list(self._recent_announces)
             value = {
                 "schema": 1,
                 "captured_at": datetime.now(UTC).isoformat(),
@@ -496,6 +505,13 @@ class RNSMeshtasticInterface(Interface):
                 "counters": dict(self._telemetry),
                 "reassembly": self.protocol.telemetry(),
                 "peers": peers,
+                "announce_observability": {
+                    "header_visibility": (
+                        "opaque_ifac" if getattr(self, "ifac_key", None) is not None else "plain"
+                    ),
+                    "payloads_recorded": False,
+                },
+                "recent_announces": recent_announces,
             }
             with tempfile.NamedTemporaryFile(
                 "w", dir=target.parent, delete=False, encoding="utf-8"
@@ -509,6 +525,26 @@ class RNSMeshtasticInterface(Interface):
             RNS.log(f"{self}: could not write telemetry: {error}", RNS.LOG_WARNING)
         finally:
             self._telemetry_lock.release()
+
+    def _observe_rns_frame(self, direction: str, frame: bytes, meshtastic_peer: str) -> None:
+        metadata = parse_rns_frame(frame)
+        if metadata is None:
+            if is_opaque_ifac(frame):
+                self._telemetry["opaque_ifac_frames"] += 1
+            return
+        if not metadata.is_announce:
+            return
+        observation = {
+            "captured_at": datetime.now(UTC).isoformat(),
+            "direction": direction,
+            "meshtastic_peer": meshtastic_peer,
+            "destination_hash": metadata.destination_hash,
+            "destination_type": metadata.destination_type,
+            "context": metadata.context,
+            "frame_bytes": len(frame),
+        }
+        with self._observation_lock:
+            self._recent_announces.append(observation)
 
     @staticmethod
     def should_ingress_limit() -> bool:

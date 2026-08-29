@@ -1,6 +1,6 @@
 # Optional Linux transport and LXMF propagation service
 
-For the 0.4.0 operator UI, policy profiles, metrics and explicit staged
+For the 0.5.0 operator UI, policy profiles, metrics and explicit staged
 apply/rollback workflow, see [GATEWAY_CONSOLE.md](GATEWAY_CONSOLE.md).
 
 This profile runs two separate processes without installing RNS, LXMF or the
@@ -131,10 +131,10 @@ RNS_LAN_PUBLIC_VISIBILITY=yes
 
 This keeps the Meshtastic radio `internal`, changes only the LAN/VPN listener to
 `gateway`, and leaves every public uplink as `boundary`. Public announces can
-then reach LAN clients without being forwarded to LoRa. This is deliberately
-bidirectional visibility: announces originating from a LAN client may be sent
-to the public boundary and to already learned Meshtastic peers. Keep the
-listener private and use `no` when LAN identities must remain private.
+then reach LAN clients without being forwarded to LoRa. It does not override
+`announces_from_internal = No`: LAN/radio announces are not exported to a
+boundary. Keep the listener private and use `no` when LAN clients must not see
+external boundary announces.
 
 Add at most eight explicitly permitted `host:port` endpoints, one at a time.
 IPv6 literals use `[address]:port`. URLs, credentials, comments, duplicates,
@@ -145,6 +145,35 @@ are outbound connections and do not publish a new host port.
 `mode` and IFAC are routing/isolation controls, not an application firewall.
 The one-instance caveat and the two-instance strict-isolation alternative are
 documented in [PUBLIC_BOUNDARY_AND_IOS.md](PUBLIC_BOUNDARY_AND_IOS.md).
+
+## Private IFAC boundary upstreams
+
+Private upstreams use the same bounded `boundary` policy as public upstreams,
+but require a separate IFAC shared by all private endpoints in this gateway
+instance:
+
+```dotenv
+RNS_PRIVATE_UPSTREAMS=private-a.example:4242,private-b.example:4242
+RNS_PRIVATE_UPSTREAM_IFAC_NAME=home-backbone
+RNS_PRIVATE_UPSTREAM_IFAC_PASSPHRASE=replace-with-a-separate-long-secret
+```
+
+This authenticates the private backbone but does not make it an unrestricted
+Reticulum gateway. Its IFAC pair must differ from the radio and LAN IFAC pairs.
+Console and `traffic-report` account private-boundary traffic separately.
+
+With `RNS_PUBLIC_DISCOVERY=trusted_auto`, explicit endpoints can be temporary
+bootstrap connections. Each bootstrap list must be an exact subset of its
+normal upstream list:
+
+```dotenv
+RNS_PUBLIC_BOOTSTRAP_UPSTREAMS=seed.example:4242
+RNS_PRIVATE_BOOTSTRAP_UPSTREAMS=private-seed.example:4242
+```
+
+Reticulum closes bootstrap-only interfaces after a trusted discovered
+interface is connected. Bootstrap settings are rejected in `off` or `manual`
+discovery modes.
 
 ## Start and inspect
 
@@ -190,8 +219,9 @@ docker compose --env-file .env.linux-service -f compose.linux.yaml \
   run --rm traffic-report
 ```
 
-The report separates `LoRa RNS payload`, `Public boundary aggregate` and the
-private TCP listener, plus each configured public connection. In
+The report separates `LoRa RNS payload`, `Public boundary aggregate`,
+`Private IFAC boundary aggregate` and the private TCP listener, plus each
+configured boundary connection. In
 `auto_multi_peer`, inbound bytes live on dynamic peer interfaces while outbound
 bytes also appear on them; the report deliberately adds peer RX but not peer TX
 to the physical parent, avoiding double-counting. Values are RNS frame bytes

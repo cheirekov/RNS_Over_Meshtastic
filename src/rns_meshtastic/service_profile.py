@@ -67,66 +67,93 @@ def _optional_value(environment: Mapping[str, str], name: str) -> str:
     return _value(environment, name)
 
 
-def _validate_public_host(host: str) -> str:
+def _validate_upstream_host(host: str, variable: str) -> str:
     if not host:
-        raise ValueError("RNS_PUBLIC_UPSTREAMS contains an empty host")
+        raise ValueError(f"{variable} contains an empty host")
     try:
         ipaddress.ip_address(host)
     except ValueError:
         if "." in host and host.replace(".", "").isdigit():
-            raise ValueError("RNS_PUBLIC_UPSTREAMS contains an invalid IP address") from None
+            raise ValueError(f"{variable} contains an invalid IP address") from None
         if HOSTNAME.fullmatch(host) is None:
-            raise ValueError(
-                "RNS_PUBLIC_UPSTREAMS hosts must be IP addresses or valid DNS names"
-            ) from None
+            raise ValueError(f"{variable} hosts must be IP addresses or valid DNS names") from None
     return host
 
 
-def _public_endpoint(value: str) -> tuple[str, int]:
+def _upstream_endpoint(value: str, variable: str) -> tuple[str, int]:
     value = value.strip()
     if not value:
-        raise ValueError("RNS_PUBLIC_UPSTREAMS cannot contain empty entries")
+        raise ValueError(f"{variable} cannot contain empty entries")
     if any(character in value for character in "\r\n#;/@"):
-        raise ValueError("RNS_PUBLIC_UPSTREAMS contains an unsafe endpoint")
+        raise ValueError(f"{variable} contains an unsafe endpoint")
 
     if value.startswith("["):
         closing = value.find("]")
         if closing < 0 or closing + 1 >= len(value) or value[closing + 1] != ":":
-            raise ValueError(
-                "RNS_PUBLIC_UPSTREAMS IPv6 endpoints must use [address]:port"
-            )
+            raise ValueError(f"{variable} IPv6 endpoints must use [address]:port")
         host = value[1:closing]
         port_text = value[closing + 2 :]
     else:
         if value.count(":") != 1:
-            raise ValueError("RNS_PUBLIC_UPSTREAMS entries must use host:port")
+            raise ValueError(f"{variable} entries must use host:port")
         host, port_text = value.rsplit(":", 1)
 
-    host = _validate_public_host(host.strip())
+    host = _validate_upstream_host(host.strip(), variable)
     try:
         port = int(port_text)
     except ValueError as error:
-        raise ValueError("RNS_PUBLIC_UPSTREAMS ports must be integers") from error
+        raise ValueError(f"{variable} ports must be integers") from error
     if port < 1 or port > 65535:
-        raise ValueError("RNS_PUBLIC_UPSTREAMS ports must be between 1 and 65535")
+        raise ValueError(f"{variable} ports must be between 1 and 65535")
     return host, port
 
 
-def _public_upstream_configuration(environment: Mapping[str, str]) -> tuple[str, str]:
-    raw = environment.get("RNS_PUBLIC_UPSTREAMS", "").strip()
+def _endpoint_list(environment: Mapping[str, str], variable: str) -> list[tuple[str, int]]:
+    raw = environment.get(variable, "").strip()
     if not raw:
-        return "gateway", "  # No public boundary upstreams configured"
+        return []
     entries = raw.split(",")
     if len(entries) > MAX_PUBLIC_UPSTREAMS:
-        raise ValueError(
-            f"RNS_PUBLIC_UPSTREAMS supports at most {MAX_PUBLIC_UPSTREAMS} endpoints"
-        )
-    endpoints = [_public_endpoint(entry) for entry in entries]
+        raise ValueError(f"{variable} supports at most {MAX_PUBLIC_UPSTREAMS} endpoints")
+    endpoints = [_upstream_endpoint(entry, variable) for entry in entries]
     if len(set(endpoints)) != len(endpoints):
-        raise ValueError("RNS_PUBLIC_UPSTREAMS cannot contain duplicate endpoints")
+        raise ValueError(f"{variable} cannot contain duplicate endpoints")
+    return endpoints
+
+
+def _format_endpoint(endpoint: tuple[str, int]) -> str:
+    host, port = endpoint
+    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+
+
+def _upstream_configuration(
+    environment: Mapping[str, str], discovery: str
+) -> tuple[str, str, tuple[str, str]]:
+    public = _endpoint_list(environment, "RNS_PUBLIC_UPSTREAMS")
+    public_bootstrap = set(_endpoint_list(environment, "RNS_PUBLIC_BOOTSTRAP_UPSTREAMS"))
+    private = _endpoint_list(environment, "RNS_PRIVATE_UPSTREAMS")
+    private_bootstrap = set(_endpoint_list(environment, "RNS_PRIVATE_BOOTSTRAP_UPSTREAMS"))
+
+    if not public_bootstrap.issubset(set(public)):
+        raise ValueError("RNS_PUBLIC_BOOTSTRAP_UPSTREAMS must be a subset of RNS_PUBLIC_UPSTREAMS")
+    if not private_bootstrap.issubset(set(private)):
+        raise ValueError("RNS_PRIVATE_BOOTSTRAP_UPSTREAMS must be a subset of RNS_PRIVATE_UPSTREAMS")
+    if (public_bootstrap or private_bootstrap) and discovery != "trusted_auto":
+        raise ValueError("bootstrap-only upstreams require RNS_PUBLIC_DISCOVERY=trusted_auto")
+    overlap = set(public).intersection(private)
+    if overlap:
+        endpoint = _format_endpoint(sorted(overlap)[0])
+        raise ValueError(f"upstream endpoint {endpoint} cannot be both public and private")
+
+    private_name, private_passphrase, private_ifac = _ifac_configuration(
+        environment, "RNS_PRIVATE_UPSTREAM_IFAC", "private upstream"
+    )
+    if private and not private_name:
+        raise ValueError("private upstreams require RNS_PRIVATE_UPSTREAM_IFAC_NAME and PASSPHRASE")
 
     blocks = []
-    for index, (host, port) in enumerate(endpoints, start=1):
+    for index, endpoint in enumerate(public, start=1):
+        host, port = endpoint
         blocks.append(
             f"  [[Public boundary {index}]]\n"
             "    type = BackboneInterface\n"
@@ -134,9 +161,28 @@ def _public_upstream_configuration(environment: Mapping[str, str]) -> tuple[str,
             "    mode = boundary\n"
             f"    target_host = {host}\n"
             f"    target_port = {port}\n"
-            "    announces_from_internal = No"
+            "    announces_from_internal = No\n"
+            f"    bootstrap_only = {'Yes' if endpoint in public_bootstrap else 'No'}"
         )
-    return "internal", "\n\n".join(blocks)
+    for index, endpoint in enumerate(private, start=1):
+        host, port = endpoint
+        blocks.append(
+            f"  [[Private boundary {index}]]\n"
+            "    type = BackboneInterface\n"
+            "    enabled = Yes\n"
+            "    mode = boundary\n"
+            f"    target_host = {host}\n"
+            f"    target_port = {port}\n"
+            "    announces_from_internal = No\n"
+            f"    bootstrap_only = {'Yes' if endpoint in private_bootstrap else 'No'}\n"
+            f"{private_ifac}"
+        )
+    block = (
+        "\n\n".join(blocks)
+        if blocks
+        else "  # No public boundary upstreams configured; no private IFAC boundaries configured"
+    )
+    return ("internal" if blocks else "gateway"), block, (private_name, private_passphrase)
 
 
 def _ifac_configuration(
@@ -235,13 +281,18 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
     if discovery == "trusted_auto" and not discovery_sources:
         raise ValueError("trusted_auto discovery requires RNS_DISCOVERY_SOURCES")
     discovery_max = _integer(environment, "RNS_DISCOVERY_MAX", 1, 1, 8)
+    discovery_required_value = _integer(
+        environment, "RNS_DISCOVERY_REQUIRED_VALUE", 14, 1, 255
+    )
+    discovery_gravity = _integer(environment, "RNS_DISCOVERY_GRAVITY", 0, -100, 100)
+    respond_to_probes = _yes_no(environment, "RNS_RESPOND_TO_PROBES", "no")
     autoconnect_policy = (
         "  # autoconnect policy inactive"
         if discovery != "trusted_auto"
         else (
             f"  autoconnect_discovered_interfaces = {discovery_max}\n"
             "  autoconnect_interface_mode = boundary\n"
-            "  autoconnect_interface_gravity = 0\n"
+            f"  autoconnect_interface_gravity = {discovery_gravity}\n"
             "  autoconnect_announces_to_internal = No"
         )
     )
@@ -253,11 +304,14 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
     discovery_block = (
         f"  discover_interfaces = {'No' if discovery == 'off' else 'Yes'}\n"
         f"{discovery_sources_line}\n"
-        "  required_discovery_value = 14\n"
+        f"  required_discovery_value = {discovery_required_value}\n"
+        f"  respond_to_probes = {respond_to_probes.title()}\n"
         f"{autoconnect_policy}"
     )
 
-    private_interface_mode, public_upstream_block = _public_upstream_configuration(environment)
+    private_interface_mode, boundary_upstream_block, private_upstream_ifac = (
+        _upstream_configuration(environment, discovery)
+    )
     if discovery != "off":
         # Discovery may introduce a public boundary after startup. Keep the
         # radio private before that happens instead of opening a transient
@@ -274,11 +328,16 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
     tcp_name, tcp_passphrase, tcp_ifac = _ifac_configuration(
         environment, "RNS_TCP_IFAC", "TCP"
     )
-    if radio_name and tcp_name and (radio_name, radio_passphrase) == (
-        tcp_name,
-        tcp_passphrase,
-    ):
-        raise ValueError("radio and TCP client IFAC credentials must be different")
+    configured_ifacs = [
+        ("radio", radio_name, radio_passphrase),
+        ("TCP client", tcp_name, tcp_passphrase),
+        ("private upstream", *private_upstream_ifac),
+    ]
+    configured_ifacs = [entry for entry in configured_ifacs if entry[1]]
+    for index, left in enumerate(configured_ifacs):
+        for right in configured_ifacs[index + 1 :]:
+            if left[1:] == right[1:]:
+                raise ValueError(f"{left[0]} and {right[0]} IFAC credentials must be different")
 
     auth_required = _yes_no(environment, "LXMD_AUTH_REQUIRED", "no")
     identities = [
@@ -317,7 +376,7 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
         "RNS_MAX_PEERS": str(_integer(environment, "RNS_MAX_PEERS", 32, 1, 512)),
         "RNS_RADIO_INTERFACE_MODE": private_interface_mode,
         "RNS_LAN_INTERFACE_MODE": lan_interface_mode,
-        "RNS_PUBLIC_UPSTREAM_BLOCK": public_upstream_block,
+        "RNS_BOUNDARY_UPSTREAM_BLOCK": boundary_upstream_block,
         "RNS_RADIO_IFAC_BLOCK": radio_ifac,
         "RNS_TCP_IFAC_BLOCK": tcp_ifac,
         "RNS_TCP_LISTEN_PORT": str(

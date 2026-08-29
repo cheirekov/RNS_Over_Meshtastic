@@ -397,12 +397,27 @@ def _gateway_validate(args: argparse.Namespace) -> int:
 
 
 def _gateway_console(args: argparse.Namespace) -> int:
+    from rns_meshtastic.gateway_config import validate_gateway_environment
     from rns_meshtastic.gateway_console import GatewayState, serve
 
     state = GatewayState(Path(args.config_dir), Path(args.lxmd_dir), Path(args.stage_dir))
-    print(f"Gateway Console listening on http://{args.bind}:{args.port}")
     try:
-        serve(args.bind, args.port, state)
+        validated = validate_gateway_environment(os.environ).values
+    except ValueError as error:
+        print(f"Gateway Console configuration is invalid: {error}", file=sys.stderr)
+        return 1
+    auth_mode = validated.get("RNS_CONSOLE_AUTH_MODE", "off")
+    print(f"Gateway Console listening on http://{args.bind}:{args.port}")
+    print(f"Gateway Console authentication: {auth_mode}")
+    try:
+        serve(
+            args.bind,
+            args.port,
+            state,
+            auth_mode=auth_mode,
+            username=validated.get("RNS_CONSOLE_USERNAME", ""),
+            password=validated.get("RNS_CONSOLE_PASSWORD", ""),
+        )
     except KeyboardInterrupt:
         return 0
     return 0

@@ -13,6 +13,7 @@ SCHEMA_VERSION = 1
 RADIO_PARENT_TYPE = "RNSMeshtasticInterface"
 RADIO_PEER_TYPE = "MeshtasticPeerInterface"
 PUBLIC_NAME_PREFIX = "Public boundary "
+PRIVATE_UPSTREAM_NAME_PREFIX = "Private boundary "
 PRIVATE_TCP_NAME = "LAN VPN Reticulum clients"
 
 
@@ -75,7 +76,9 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
         radio = radio.add(TrafficCounter(rx=counter.rx, rxs=counter.rxs))
 
     public: dict[str, dict[str, int | float | bool]] = {}
+    private_upstreams: dict[str, dict[str, int | float | bool]] = {}
     public_total = TrafficCounter()
+    private_upstream_total = TrafficCounter()
     private_total = TrafficCounter()
     private_client_count = 0
     for item in interfaces:
@@ -84,6 +87,10 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
             counter = _counter(item)
             public_total = public_total.add(counter)
             public[short_name] = counter.as_dict() | {"up": bool(item.get("status"))}
+        elif short_name.startswith(PRIVATE_UPSTREAM_NAME_PREFIX):
+            counter = _counter(item)
+            private_upstream_total = private_upstream_total.add(counter)
+            private_upstreams[short_name] = counter.as_dict() | {"up": bool(item.get("status"))}
         elif short_name == PRIVATE_TCP_NAME and not item.get("parent_interface_name"):
             private_total = private_total.add(_counter(item))
         elif item.get("parent_interface_name") == PRIVATE_TCP_NAME:
@@ -96,8 +103,10 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
         "transport_uptime": float(stats.get("transport_uptime", 0) or 0),
         "lora": radio.as_dict(),
         "public": public_total.as_dict(),
+        "private_upstream": private_upstream_total.as_dict(),
         "private_tcp": private_total.as_dict(),
         "public_interfaces": public,
+        "private_interfaces": private_upstreams,
         "radio_parent_count": len(radio_parents),
         "radio_peer_count": len(radio_peers),
         "private_tcp_client_count": private_client_count,
@@ -235,6 +244,14 @@ def format_report(current: Mapping[str, Any], baseline: Mapping[str, Any] | None
             elapsed,
         )
     )
+    lines.extend(
+        _format_counter(
+            "Private IFAC boundary aggregate",
+            current.get("private_upstream", {}),
+            baseline.get("private_upstream") if comparable else None,
+            elapsed,
+        )
+    )
     lines.append(
         f"radio topology: {current.get('radio_parent_count', 0)} parent(s), "
         f"{current.get('radio_peer_count', 0)} dynamic peer(s)"
@@ -250,6 +267,17 @@ def format_report(current: Mapping[str, Any], baseline: Mapping[str, Any] | None
             )
     else:
         lines.append("public upstreams: none visible")
+    private_interfaces = current.get("private_interfaces", {})
+    if private_interfaces:
+        lines.append("private IFAC upstreams:")
+        for name, counter in sorted(private_interfaces.items()):
+            status = "up" if counter.get("up") else "down"
+            lines.append(
+                f"  {name}: {status}, in {_human_bytes(int(counter.get('rx', 0) or 0))}, "
+                f"out {_human_bytes(int(counter.get('tx', 0) or 0))}"
+            )
+    else:
+        lines.append("private IFAC upstreams: none visible")
     lines.append(
         "note: LoRa values are Reticulum payload bytes accepted by the interface, "
         "not RF airtime or Meshtastic framing overhead"

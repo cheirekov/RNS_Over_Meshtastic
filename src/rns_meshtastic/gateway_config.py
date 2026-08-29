@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import shutil
@@ -51,10 +52,18 @@ MANAGED_FIELDS = (
     "RNS_REPAIR_REQUEST_BUDGET",
     "RNS_REPAIR_BUDGET_WINDOW",
     "RNS_PUBLIC_UPSTREAMS",
+    "RNS_PUBLIC_BOOTSTRAP_UPSTREAMS",
+    "RNS_PRIVATE_UPSTREAMS",
+    "RNS_PRIVATE_BOOTSTRAP_UPSTREAMS",
+    "RNS_PRIVATE_UPSTREAM_IFAC_NAME",
+    "RNS_PRIVATE_UPSTREAM_IFAC_PASSPHRASE",
     "RNS_LAN_PUBLIC_VISIBILITY",
     "RNS_PUBLIC_DISCOVERY",
     "RNS_DISCOVERY_SOURCES",
     "RNS_DISCOVERY_MAX",
+    "RNS_DISCOVERY_REQUIRED_VALUE",
+    "RNS_DISCOVERY_GRAVITY",
+    "RNS_RESPOND_TO_PROBES",
     "RNS_RADIO_IFAC_NAME",
     "RNS_RADIO_IFAC_PASSPHRASE",
     "RNS_TCP_IFAC_NAME",
@@ -64,6 +73,9 @@ MANAGED_FIELDS = (
     "RNS_LOGLEVEL",
     "RNS_CONSOLE_PUBLISH_IP",
     "RNS_CONSOLE_PORT",
+    "RNS_CONSOLE_AUTH_MODE",
+    "RNS_CONSOLE_USERNAME",
+    "RNS_CONSOLE_PASSWORD",
     "LXMD_NODE_NAME",
     "LXMD_DISPLAY_NAME",
     "LXMD_ANNOUNCE_INTERVAL",
@@ -149,6 +161,34 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
     values["RNS_PUBLIC_DISCOVERY"] = discovery
     values["RNS_DISCOVERY_SOURCES"] = ",".join(sources)
 
+    console_mode = values.get("RNS_CONSOLE_AUTH_MODE", "off").lower()
+    if console_mode not in {"off", "basic"}:
+        raise ValueError("RNS_CONSOLE_AUTH_MODE must be off or basic")
+    values["RNS_CONSOLE_AUTH_MODE"] = console_mode
+    publish_ip = values.get("RNS_CONSOLE_PUBLISH_IP", "127.0.0.1") or "127.0.0.1"
+    try:
+        address = ipaddress.ip_address(publish_ip)
+    except ValueError as error:
+        raise ValueError("RNS_CONSOLE_PUBLISH_IP must be an IPv4 or IPv6 address") from error
+    username = values.get("RNS_CONSOLE_USERNAME", "")
+    password = values.get("RNS_CONSOLE_PASSWORD", "")
+    if console_mode == "off":
+        if not address.is_loopback:
+            raise ValueError(
+                "RNS_CONSOLE_AUTH_MODE=basic is required when Console is published outside loopback"
+            )
+        if username or password:
+            raise ValueError("Console credentials must be empty when RNS_CONSOLE_AUTH_MODE=off")
+    else:
+        if re.fullmatch(r"[A-Za-z0-9._@-]{1,64}", username) is None:
+            raise ValueError("RNS_CONSOLE_USERNAME must use 1-64 safe username characters")
+        if password.startswith("CHANGE-ME") or len(password) < 16:
+            raise ValueError(
+                "RNS_CONSOLE_PASSWORD must be a non-placeholder value of at least 16 characters"
+            )
+        if password == username:
+            raise ValueError("RNS_CONSOLE_PASSWORD must differ from RNS_CONSOLE_USERNAME")
+
     try:
         manual_announce_cooldown = int(values.get("LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS", "900"))
     except ValueError as error:
@@ -170,7 +210,11 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
     if discovery == "manual" and not sources:
         warnings.append("manual discovery accepts candidates from every connected Reticulum network")
     if values.get("RNS_LAN_PUBLIC_VISIBILITY", "no").lower() == "yes":
-        warnings.append("public announces are visible to trusted LAN/VPN clients")
+        warnings.append("boundary announces are visible to trusted LAN/VPN clients")
+    if values.get("RNS_PRIVATE_UPSTREAMS", ""):
+        warnings.append("private upstreams are boundary interfaces and share one dedicated IFAC profile")
+    if console_mode == "basic":
+        warnings.append("Console Basic authentication requires a trusted VPN or HTTPS for confidentiality")
     if values.get("MESHTASTIC_MQTT_FORWARDING_POLICY", "inherit") == "inherit":
         warnings.append("Meshtastic may forward bridge packets through MQTT when the radio permits it")
     return ValidationResult(values=values, warnings=tuple(warnings))

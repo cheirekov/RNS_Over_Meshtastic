@@ -1,9 +1,13 @@
+import base64
+import http.client
+import threading
 from datetime import UTC, datetime
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from rns_meshtastic.config_schema import config_schema
 from rns_meshtastic.gateway_config import MANAGED_FIELDS, parse_env_file
-from rns_meshtastic.gateway_console import GatewayState, _prometheus
+from rns_meshtastic.gateway_console import ConsoleHandler, GatewayState, _prometheus
 
 
 def test_console_status_separates_lora_lan_public_and_lxmd(monkeypatch, tmp_path: Path):
@@ -139,3 +143,32 @@ def test_cumulative_history_does_not_create_alert_but_new_delta_does(monkeypatch
     assert "lora_tx_rejected" in {alert["code"] for alert in state.status()["alerts"]}
     state._transient_alerts.clear()
     assert "lora_tx_rejected" not in {alert["code"] for alert in state.status()["alerts"]}
+
+
+def test_console_basic_auth_protects_ui_but_not_minimal_health():
+    class State:
+        @staticmethod
+        def status():
+            return {"running": True}
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ConsoleHandler)
+    server.gateway_state = State()
+    server.console_auth_mode = "basic"
+    server.console_username = "operator"
+    server.console_password = "correct-horse-battery-staple"
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+        connection.request("GET", "/healthz")
+        assert connection.getresponse().status == 200
+        connection.request("GET", "/")
+        assert connection.getresponse().status == 401
+        credentials = base64.b64encode(b"operator:correct-horse-battery-staple").decode()
+        connection.request("GET", "/", headers={"Authorization": f"Basic {credentials}"})
+        assert connection.getresponse().status == 200
+        connection.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
