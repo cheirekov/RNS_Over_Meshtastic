@@ -31,6 +31,7 @@ $RNS_DISCOVERY_BLOCK
     $RNS_GATEWAY_NODE_LINE
     accept_broadcast_on_hub = $RNS_ACCEPT_BROADCAST_ON_HUB
     max_peers = $RNS_MAX_PEERS
+    peer_announce_idle_timeout = $RNS_PEER_ANNOUNCE_IDLE_SECONDS
     $RNS_ALLOWED_NODES_LINE
     want_ack = No
     pki_required = No

@@ -28,6 +28,7 @@ def test_renders_restricted_gateway_and_bounded_lxmd(tmp_path: Path) -> None:
     assert "mesh_mode = gateway_unicast" in rns_config
     assert "accept_broadcast_on_hub = No" in rns_config
     assert "max_peers = 32" in rns_config
+    assert "peer_announce_idle_timeout = 900" in rns_config
     assert "allowed_nodes = !a1b3b3b8, !8fd13c64" in rns_config
     assert "mode = gateway" in rns_config
     assert "No public boundary upstreams configured" in rns_config
@@ -65,6 +66,7 @@ def test_auto_multi_peer_allows_open_discovery_and_renders_bounded_hub(tmp_path:
     assert "gateway_role = hub" in config
     assert "accept_broadcast_on_hub = Yes" in config
     assert "max_peers = 12" in config
+    assert "peer_announce_idle_timeout = 900" in config
     assert "allowed_nodes is intentionally empty" in config
 
 
@@ -133,9 +135,7 @@ def test_bootstrap_upstream_must_be_subset_and_use_trusted_discovery(tmp_path: P
     with pytest.raises(ValueError, match="trusted_auto"):
         configuration_values(values | {"RNS_PUBLIC_DISCOVERY": "off"})
     with pytest.raises(ValueError, match="subset"):
-        configuration_values(
-            values | {"RNS_PUBLIC_BOOTSTRAP_UPSTREAMS": "missing.example:4242"}
-        )
+        configuration_values(values | {"RNS_PUBLIC_BOOTSTRAP_UPSTREAMS": "missing.example:4242"})
 
 
 def test_discovery_tuning_and_probe_response_are_rendered(tmp_path: Path) -> None:
@@ -183,9 +183,7 @@ def test_trusted_discovery_is_boundary_only_and_keeps_radio_internal(tmp_path: P
     config = (tmp_path / "rns" / "config").read_text()
     radio, lan = config.split("  [[LAN VPN Reticulum clients]]", maxsplit=1)
     assert "discover_interfaces = Yes" in config
-    assert (
-        "interface_discovery_sources = 0123456789abcdef0123456789abcdef" in config
-    )
+    assert "interface_discovery_sources = 0123456789abcdef0123456789abcdef" in config
     assert "autoconnect_discovered_interfaces = 2" in config
     assert "autoconnect_interface_mode = boundary" in config
     assert "autoconnect_announces_to_internal = No" in config
@@ -289,9 +287,7 @@ def test_authenticated_lxmd_writes_valid_allowlist(tmp_path: Path) -> None:
         "LXMD_ALLOWED_IDENTITIES": "0123456789abcdef0123456789ABCDEF",
     }
     render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
-    assert (tmp_path / "lxmd" / "allowed").read_text() == (
-        "0123456789abcdef0123456789abcdef\n"
-    )
+    assert (tmp_path / "lxmd" / "allowed").read_text() == ("0123456789abcdef0123456789abcdef\n")
 
 
 def test_unicast_client_requires_and_renders_gateway_node(tmp_path: Path) -> None:

@@ -46,6 +46,7 @@ MANAGED_FIELDS = (
     "RNS_GATEWAY_NODE",
     "RNS_ALLOWED_NODES",
     "RNS_MAX_PEERS",
+    "RNS_PEER_ANNOUNCE_IDLE_SECONDS",
     "RNS_LORA_POLICY",
     "RNS_RADIO_TX_INTERVAL",
     "RNS_RADIO_QUEUE_FRAGMENTS",
@@ -144,9 +145,15 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
     if profile not in {"conservative", "balanced", "custom"}:
         raise ValueError("RNS_LORA_POLICY must be conservative, balanced or custom")
     values["RNS_LORA_POLICY"] = profile
+    profile_overrides: list[str] = []
     if profile != "custom":
         for name, default in POLICY_PROFILES[profile].items():
-            values.setdefault(name, default)
+            if name in values and values[name] != default:
+                profile_overrides.append(name)
+            # Named profiles are policies, not suggestions. Always render their
+            # bounded values so stale expert settings cannot silently weaken a
+            # profile selected in Console.
+            values[name] = default
 
     discovery = values.get("RNS_PUBLIC_DISCOVERY", "off").lower()
     if discovery not in DISCOVERY_MODES:
@@ -183,9 +190,7 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
         if re.fullmatch(r"[A-Za-z0-9._@-]{1,64}", username) is None:
             raise ValueError("RNS_CONSOLE_USERNAME must use 1-64 safe username characters")
         if password.startswith("CHANGE-ME") or len(password) < 16:
-            raise ValueError(
-                "RNS_CONSOLE_PASSWORD must be a non-placeholder value of at least 16 characters"
-            )
+            raise ValueError("RNS_CONSOLE_PASSWORD must be a non-placeholder value of at least 16 characters")
         if password == username:
             raise ValueError("RNS_CONSOLE_PASSWORD must differ from RNS_CONSOLE_USERNAME")
 
@@ -197,6 +202,14 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
         raise ValueError("LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS must be between 300 and 86400")
     values["LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS"] = str(manual_announce_cooldown)
 
+    try:
+        peer_announce_idle = int(values.get("RNS_PEER_ANNOUNCE_IDLE_SECONDS", "900"))
+    except ValueError as error:
+        raise ValueError("RNS_PEER_ANNOUNCE_IDLE_SECONDS must be an integer") from error
+    if peer_announce_idle != 0 and not 300 <= peer_announce_idle <= 86400:
+        raise ValueError("RNS_PEER_ANNOUNCE_IDLE_SECONDS must be 0 or between 300 and 86400")
+    values["RNS_PEER_ANNOUNCE_IDLE_SECONDS"] = str(peer_announce_idle)
+
     if values.get("MESHTASTIC_OVERRIDE_DUTY_CYCLE", "no").lower() not in {"", "no", "false", "0"}:
         raise ValueError("Meshtastic duty-cycle override is forbidden by the gateway safety policy")
 
@@ -205,6 +218,10 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
     configuration_values(values)
 
     warnings: list[str] = []
+    if profile_overrides:
+        warnings.append(
+            f"{profile} LoRa policy replaced expert overrides for: " + ", ".join(profile_overrides)
+        )
     if profile == "custom":
         warnings.append("custom LoRa policy bypasses conservative queue and pacing defaults")
     if discovery == "manual" and not sources:

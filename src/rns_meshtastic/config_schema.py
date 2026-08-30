@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from rns_meshtastic.gateway_config import MANAGED_FIELDS, is_secret
+from rns_meshtastic.gateway_config import MANAGED_FIELDS, POLICY_PROFILES, is_secret
 
 GROUPS = (
     ("radio", "Meshtastic radio"),
@@ -31,6 +31,7 @@ def _field(
     maximum: float | None = None,
     advanced: bool = False,
     required: str | None = None,
+    applies_when: tuple[tuple[str, tuple[str, ...]], ...] = (),
 ) -> dict[str, Any]:
     return {
         "name": name,
@@ -45,6 +46,9 @@ def _field(
         "advanced": advanced,
         "secret": is_secret(name),
         "required_when": required,
+        "applies_when": [
+            {"field": dependency, "values": list(values)} for dependency, values in applies_when
+        ],
     }
 
 
@@ -111,11 +115,19 @@ FIELDS = (
         "reticulum",
         "Remote Node ID for a gateway_unicast client.",
         required="RNS_MESH_MODE=gateway_unicast and RNS_GATEWAY_ROLE=client",
+        applies_when=(
+            ("RNS_MESH_MODE", ("gateway_unicast",)),
+            ("RNS_GATEWAY_ROLE", ("client",)),
+        ),
     ),
     _field(
         "RNS_ALLOWED_NODES",
         "reticulum",
         "Optional comma-separated Meshtastic Node-ID ingress allowlist; required by a fixed unicast hub.",
+        applies_when=(
+            ("RNS_MESH_MODE", ("gateway_unicast", "auto_multi_peer")),
+            ("RNS_GATEWAY_ROLE", ("hub",)),
+        ),
     ),
     _field(
         "RNS_MAX_PEERS",
@@ -126,6 +138,26 @@ FIELDS = (
         minimum=1,
         maximum=512,
         advanced=True,
+        applies_when=(
+            ("RNS_MESH_MODE", ("gateway_unicast", "auto_multi_peer")),
+            ("RNS_GATEWAY_ROLE", ("hub",)),
+        ),
+    ),
+    _field(
+        "RNS_PEER_ANNOUNCE_IDLE_SECONDS",
+        "safety",
+        "After this many seconds without inbound bridge traffic, suppress only ordinary "
+        "periodic RNS announces to that peer. Data, proofs and path responses remain enabled; "
+        "zero disables the safeguard.",
+        default="900",
+        kind="integer",
+        minimum=0,
+        maximum=86400,
+        advanced=True,
+        applies_when=(
+            ("RNS_MESH_MODE", ("gateway_unicast", "auto_multi_peer")),
+            ("RNS_GATEWAY_ROLE", ("hub",)),
+        ),
     ),
     _field(
         "RNS_LORA_POLICY",
@@ -188,6 +220,7 @@ FIELDS = (
         kind="endpoint-list",
         advanced=True,
         required="RNS_PUBLIC_DISCOVERY=trusted_auto",
+        applies_when=(("RNS_PUBLIC_DISCOVERY", ("trusted_auto",)),),
     ),
     _field(
         "RNS_PRIVATE_UPSTREAMS",
@@ -202,6 +235,7 @@ FIELDS = (
         kind="endpoint-list",
         advanced=True,
         required="RNS_PUBLIC_DISCOVERY=trusted_auto",
+        applies_when=(("RNS_PUBLIC_DISCOVERY", ("trusted_auto",)),),
     ),
     _field(
         "RNS_PRIVATE_UPSTREAM_IFAC_NAME",
@@ -209,6 +243,7 @@ FIELDS = (
         "IFAC network name shared by all configured private upstream boundaries.",
         advanced=True,
         required="RNS_PRIVATE_UPSTREAMS is not empty",
+        applies_when=(("RNS_PRIVATE_UPSTREAMS", ("__nonempty__",)),),
     ),
     _field(
         "RNS_PRIVATE_UPSTREAM_IFAC_PASSPHRASE",
@@ -216,6 +251,7 @@ FIELDS = (
         "Private-upstream IFAC secret; its value is never returned by Console.",
         advanced=True,
         required="RNS_PRIVATE_UPSTREAMS is not empty",
+        applies_when=(("RNS_PRIVATE_UPSTREAMS", ("__nonempty__",)),),
     ),
     _field(
         "RNS_LAN_PUBLIC_VISIBILITY",
@@ -236,6 +272,7 @@ FIELDS = (
         "discovery",
         "Comma-separated trusted 32-hex discovery source identity hashes.",
         advanced=True,
+        applies_when=(("RNS_PUBLIC_DISCOVERY", ("manual", "trusted_auto")),),
     ),
     _field(
         "RNS_DISCOVERY_MAX",
@@ -246,6 +283,7 @@ FIELDS = (
         minimum=1,
         maximum=8,
         advanced=True,
+        applies_when=(("RNS_PUBLIC_DISCOVERY", ("trusted_auto",)),),
     ),
     _field(
         "RNS_DISCOVERY_REQUIRED_VALUE",
@@ -256,6 +294,7 @@ FIELDS = (
         minimum=1,
         maximum=255,
         advanced=True,
+        applies_when=(("RNS_PUBLIC_DISCOVERY", ("manual", "trusted_auto")),),
     ),
     _field(
         "RNS_DISCOVERY_GRAVITY",
@@ -266,6 +305,7 @@ FIELDS = (
         minimum=-100,
         maximum=100,
         advanced=True,
+        applies_when=(("RNS_PUBLIC_DISCOVERY", ("trusted_auto",)),),
     ),
     _field(
         "RNS_RESPOND_TO_PROBES",
@@ -349,6 +389,7 @@ FIELDS = (
         "Console Basic-auth username. It is not a secret, but should not identify a personal account.",
         advanced=True,
         required="RNS_CONSOLE_AUTH_MODE=basic",
+        applies_when=(("RNS_CONSOLE_AUTH_MODE", ("basic",)),),
     ),
     _field(
         "RNS_CONSOLE_PASSWORD",
@@ -356,6 +397,7 @@ FIELDS = (
         "Console password; never returned by Console. Use at least 16 random characters and VPN or HTTPS.",
         advanced=True,
         required="RNS_CONSOLE_AUTH_MODE=basic",
+        applies_when=(("RNS_CONSOLE_AUTH_MODE", ("basic",)),),
     ),
     _field(
         "LXMD_NODE_NAME",
@@ -465,7 +507,8 @@ def config_schema() -> dict[str, Any]:
     if names != MANAGED_FIELDS:
         raise RuntimeError("configuration schema and managed environment fields are out of sync")
     return {
-        "schema": 1,
+        "schema": 2,
         "groups": [{"id": key, "label": label} for key, label in GROUPS],
         "fields": list(FIELDS),
+        "policy_profiles": {name: dict(values) for name, values in POLICY_PROFILES.items()},
     }

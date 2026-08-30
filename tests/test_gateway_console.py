@@ -1,7 +1,7 @@
 import base64
 import http.client
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -68,10 +68,17 @@ def test_console_configuration_view_redacts_secrets(monkeypatch, tmp_path: Path)
 
 def test_console_schema_covers_all_managed_fields_without_secret_values():
     value = config_schema()
+    assert value["schema"] == 2
     assert tuple(field["name"] for field in value["fields"]) == MANAGED_FIELDS
     secret_fields = [field for field in value["fields"] if field["secret"]]
     assert secret_fields
     assert all("value" not in field for field in secret_fields)
+    assert value["policy_profiles"]["conservative"]["RNS_RADIO_TX_INTERVAL"] == "2.0"
+    gateway_node = next(field for field in value["fields"] if field["name"] == "RNS_GATEWAY_NODE")
+    assert gateway_node["applies_when"] == [
+        {"field": "RNS_MESH_MODE", "values": ["gateway_unicast"]},
+        {"field": "RNS_GATEWAY_ROLE", "values": ["client"]},
+    ]
 
 
 def test_console_stage_preserves_existing_secret(monkeypatch, tmp_path: Path):
@@ -143,6 +150,51 @@ def test_cumulative_history_does_not_create_alert_but_new_delta_does(monkeypatch
     assert "lora_tx_rejected" in {alert["code"] for alert in state.status()["alerts"]}
     state._transient_alerts.clear()
     assert "lora_tx_rejected" not in {alert["code"] for alert in state.status()["alerts"]}
+
+
+def test_heartbeat_aware_stale_alert_distinguishes_quiet_from_dead(monkeypatch, tmp_path: Path):
+    traffic = {
+        "transport_id": "abc",
+        "transport_uptime": 12,
+        "lora": {},
+        "private_tcp": {},
+        "public": {},
+        "public_interfaces": {},
+    }
+    telemetry = {
+        "schema": 1,
+        "captured_at": (datetime.now(UTC) - timedelta(seconds=25)).isoformat(),
+        "heartbeat_interval_seconds": 10,
+        "online": True,
+        "last_radio_activity_at": (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+        "peers": [
+            {
+                "node_id": "!a1b3b3b8",
+                "idle_seconds": 3600,
+                "announce_delivery_state": "ordinary_announces_suppressed",
+                "ordinary_announces_suppressed": 3,
+            }
+        ],
+    }
+    telemetry_path = tmp_path / "meshtastic-telemetry.json"
+    telemetry_path.write_text(__import__("json").dumps(telemetry), encoding="utf-8")
+    monkeypatch.setattr("rns_meshtastic.gateway_console.collect_rnstatus", lambda _: traffic)
+    monkeypatch.setattr("rns_meshtastic.gateway_console.collect_routes", lambda _: [])
+    monkeypatch.setattr("rns_meshtastic.gateway_console.collect_discovery", lambda _: [])
+    monkeypatch.setattr(
+        "rns_meshtastic.gateway_console.collect_lxmd_status",
+        lambda *_: {"up": True, "traffic": {"available": False, "source": "unavailable"}},
+    )
+    state = GatewayState(tmp_path, tmp_path / "lxmd", tmp_path / "stages")
+    status = state.status()
+    assert "meshtastic_telemetry_stale" not in {alert["code"] for alert in status["alerts"]}
+    assert status["radio_state"] == "up"
+    assert status["radio_activity"]["state"] == "idle"
+    assert status["meshtastic_peer_health"][0]["announce_delivery_state"] == ("ordinary_announces_suppressed")
+
+    telemetry["captured_at"] = (datetime.now(UTC) - timedelta(seconds=31)).isoformat()
+    telemetry_path.write_text(__import__("json").dumps(telemetry), encoding="utf-8")
+    assert "meshtastic_telemetry_stale" in {alert["code"] for alert in state.status()["alerts"]}
 
 
 def test_console_basic_auth_protects_ui_but_not_minimal_health():

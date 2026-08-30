@@ -36,13 +36,54 @@ def test_conservative_profile_applies_bounded_defaults():
     assert result.values["RNS_LORA_POLICY"] == "conservative"
     assert result.values["RNS_RADIO_TX_INTERVAL"] == "2.0"
     assert result.values["RNS_RADIO_QUEUE_FRAGMENTS"] == "32"
+    assert result.values["RNS_PEER_ANNOUNCE_IDLE_SECONDS"] == "900"
     assert result.values["RNS_REPAIR_REQUEST_BUDGET"] == "12"
     assert result.values["LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS"] == "900"
+
+
+def test_named_policy_replaces_stale_expert_overrides():
+    result = validate_gateway_environment(
+        environment()
+        | {
+            "RNS_LORA_POLICY": "conservative",
+            "RNS_RADIO_TX_INTERVAL": "0.25",
+            "RNS_RADIO_QUEUE_FRAGMENTS": "1024",
+        }
+    )
+    assert result.values["RNS_RADIO_TX_INTERVAL"] == "2.0"
+    assert result.values["RNS_RADIO_QUEUE_FRAGMENTS"] == "32"
+    assert any("replaced expert overrides" in warning for warning in result.warnings)
+
+
+def test_custom_policy_preserves_valid_expert_values():
+    result = validate_gateway_environment(
+        environment()
+        | {
+            "RNS_LORA_POLICY": "custom",
+            "RNS_RADIO_TX_INTERVAL": "3.0",
+            "RNS_RADIO_QUEUE_FRAGMENTS": "48",
+            "RNS_REPAIR_REQUEST_BUDGET": "8",
+            "RNS_REPAIR_BUDGET_WINDOW": "90",
+        }
+    )
+    assert result.values["RNS_RADIO_TX_INTERVAL"] == "3.0"
+    assert result.values["RNS_RADIO_QUEUE_FRAGMENTS"] == "48"
 
 
 def test_manual_announce_cooldown_has_a_hard_minimum():
     with pytest.raises(ValueError, match="between 300 and 86400"):
         validate_gateway_environment(environment() | {"LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS": "299"})
+
+
+def test_peer_announce_idle_safeguard_can_be_disabled_but_not_misconfigured():
+    assert (
+        validate_gateway_environment(environment() | {"RNS_PEER_ANNOUNCE_IDLE_SECONDS": "0"}).values[
+            "RNS_PEER_ANNOUNCE_IDLE_SECONDS"
+        ]
+        == "0"
+    )
+    with pytest.raises(ValueError, match="must be 0 or between 300 and 86400"):
+        validate_gateway_environment(environment() | {"RNS_PEER_ANNOUNCE_IDLE_SECONDS": "299"})
 
 
 def test_trusted_discovery_requires_allowlisted_identity():

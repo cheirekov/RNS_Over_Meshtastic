@@ -350,6 +350,14 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
     if auth_required == "yes" and not identities:
         raise ValueError("LXMD_ALLOWED_IDENTITIES is required when LXMD_AUTH_REQUIRED=yes")
 
+    peer_announce_idle = _integer(
+        environment, "RNS_PEER_ANNOUNCE_IDLE_SECONDS", 900, 0, 86_400
+    )
+    if 0 < peer_announce_idle < 300:
+        raise ValueError(
+            "RNS_PEER_ANNOUNCE_IDLE_SECONDS must be 0 or between 300 and 86400"
+        )
+
     values = {
         "MESHTASTIC_TCP_HOST": _value(environment, "MESHTASTIC_TCP_HOST"),
         "MESHTASTIC_TCP_PORT": str(
@@ -374,6 +382,7 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
         "RNS_ALLOWED_NODES_LINE": _node_list(environment, mesh_mode, gateway_role),
         "RNS_ACCEPT_BROADCAST_ON_HUB": "Yes" if mesh_mode == "auto_multi_peer" else "No",
         "RNS_MAX_PEERS": str(_integer(environment, "RNS_MAX_PEERS", 32, 1, 512)),
+        "RNS_PEER_ANNOUNCE_IDLE_SECONDS": str(peer_announce_idle),
         "RNS_RADIO_INTERFACE_MODE": private_interface_mode,
         "RNS_LAN_INTERFACE_MODE": lan_interface_mode,
         "RNS_BOUNDARY_UPSTREAM_BLOCK": boundary_upstream_block,

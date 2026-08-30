@@ -48,7 +48,7 @@ from rns_meshtastic.traffic_report import collect_rnstatus
 CONFIG_FIELDS = MANAGED_FIELDS
 HASH = re.compile(r"<([0-9a-fA-F]{32})>")
 STORE = re.compile(r"Messagestore contains (\d+) messages, ([^(]+) \(([^ ]+) utilised of ([^)]+)\)")
-TELEMETRY_STALE_SECONDS = 20.0
+TELEMETRY_STALE_MINIMUM_SECONDS = 30.0
 TRANSIENT_ALERT_SECONDS = 120.0
 
 
@@ -99,6 +99,17 @@ def _age_seconds(value: Any) -> float | None:
         return max(0.0, (datetime.now(UTC) - when).total_seconds())
     except (TypeError, ValueError):
         return None
+
+
+def _telemetry_stale_seconds(telemetry: dict[str, Any]) -> float:
+    """Return a heartbeat-aware stale threshold with a safe legacy default."""
+    try:
+        heartbeat = float(telemetry.get("heartbeat_interval_seconds", 10.0))
+    except (TypeError, ValueError):
+        heartbeat = 10.0
+    if heartbeat <= 0 or heartbeat > 300:
+        heartbeat = 10.0
+    return max(TELEMETRY_STALE_MINIMUM_SECONDS, heartbeat * 3.0)
 
 
 def collect_discovery(config_dir: Path) -> list[dict[str, Any]]:
@@ -265,11 +276,12 @@ class GatewayState:
             alerts.append(BridgeAlertV1("warning", "lora_queue_high", "LoRa queue is at least 75% full"))
 
         telemetry_age = _age_seconds(telemetry.get("captured_at"))
+        telemetry_stale_after = _telemetry_stale_seconds(telemetry)
         if not telemetry:
             alerts.append(
                 BridgeAlertV1("error", "meshtastic_telemetry_missing", "Meshtastic telemetry is unavailable")
             )
-        elif telemetry_age is None or telemetry_age > TELEMETRY_STALE_SECONDS:
+        elif telemetry_age is None or telemetry_age > telemetry_stale_after:
             alerts.append(
                 BridgeAlertV1("error", "meshtastic_telemetry_stale", "Meshtastic telemetry is stale")
             )
@@ -337,12 +349,22 @@ class GatewayState:
             self._missing_since = None
 
         peers_list: list[BridgePeerRouteV1] = []
+        peer_health: list[dict[str, Any]] = []
         for peer in telemetry.get("peers", []):
             if not isinstance(peer, dict):
                 continue
             node_id = str(peer.get("node_id", "unknown"))
             route_count = sum(node_id in str(route.get("interface", "")) for route in routes)
             peers_list.append(BridgePeerRouteV1(peer=node_id, routes=route_count, source="meshtastic"))
+            peer_health.append(
+                {
+                    "peer": node_id,
+                    "last_inbound_at": peer.get("last_inbound_at"),
+                    "idle_seconds": peer.get("idle_seconds"),
+                    "announce_delivery_state": peer.get("announce_delivery_state", "unknown"),
+                    "ordinary_announces_suppressed": int(peer.get("ordinary_announces_suppressed", 0) or 0),
+                }
+            )
 
         status = BridgeStatusV1(
             captured_at=captured_at(),
@@ -354,7 +376,7 @@ class GatewayState:
             radio_state="up"
             if telemetry.get("online")
             and telemetry_age is not None
-            and telemetry_age <= TELEMETRY_STALE_SECONDS
+            and telemetry_age <= telemetry_stale_after
             else "unknown/down",
             rns_state="up" if collector_error is None else "unknown/down",
             lxmd_state="up" if lxmd.get("up") else "unknown/down",
@@ -382,11 +404,22 @@ class GatewayState:
         recent_announces = telemetry.get("recent_announces", [])
         if not isinstance(recent_announces, list):
             recent_announces = []
+        activity_age = _age_seconds(telemetry.get("last_radio_activity_at"))
         return to_dict(status) | {
             "traffic": traffic_snapshot,
             "lan_client_count": int(traffic.get("private_tcp_client_count", 0) or 0),
             "queue_pressure_percent": round(queue_pressure * 100, 1),
+            "telemetry_age_seconds": round(telemetry_age, 1) if telemetry_age is not None else None,
+            "telemetry_stale_after_seconds": telemetry_stale_after,
+            "radio_activity": {
+                "last_at": telemetry.get("last_radio_activity_at"),
+                "age_seconds": round(activity_age, 1) if activity_age is not None else None,
+                "state": "active"
+                if activity_age is not None and activity_age <= 60
+                else ("idle" if activity_age is not None else "no_activity_yet"),
+            },
             "meshtastic": telemetry,
+            "meshtastic_peer_health": peer_health,
             "public_interfaces": enhanced_upstreams,
             "private_interfaces": enhanced_private_upstreams,
             "lxmd": lxmd,
@@ -439,6 +472,21 @@ class GatewayState:
                     if key == "backend_down":
                         self._radio_disconnect_times.extend([time.monotonic()] * delta)
                 self._previous_telemetry_counters[key] = current
+
+            suppressed = int(counters.get("idle_peer_announces_suppressed", 0) or 0)
+            previous_suppressed = self._previous_telemetry_counters.get(
+                "idle_peer_announces_suppressed", suppressed
+            )
+            if suppressed > previous_suppressed:
+                delta = suppressed - previous_suppressed
+                self.events.append(
+                    "radio",
+                    "info",
+                    "idle_peer_announces_suppressed",
+                    f"Suppressed {delta} ordinary periodic announce(s) to idle peer(s); "
+                    "data, proofs and path responses remained enabled",
+                )
+            self._previous_telemetry_counters["idle_peer_announces_suppressed"] = suppressed
 
             now = time.monotonic()
             while self._radio_disconnect_times and self._radio_disconnect_times[0] < now - 600:
@@ -499,9 +547,7 @@ class GatewayState:
                     )
                 self._last_collector_error = collector_error
 
-    def _observe_upstreams(
-        self, upstreams: dict[str, Any], *, source: str = "public"
-    ) -> dict[str, Any]:
+    def _observe_upstreams(self, upstreams: dict[str, Any], *, source: str = "public") -> dict[str, Any]:
         wall_now = captured_at()
         monotonic_now = time.monotonic()
         enhanced: dict[str, Any] = {}
@@ -693,6 +739,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         return self.server.gateway_state  # type: ignore[attr-defined]
 
     def log_message(self, format: str, *args: object) -> None:
+        # Five-second UI polling should not dominate operational logs. Keep
+        # mutations, errors and non-routine paths visible.
+        if self.command == "GET" and urlparse(self.path).path in {
+            "/healthz",
+            "/api/v1/status",
+            "/api/v1/events",
+        }:
+            return
         super().log_message(format, *args)
 
     def _send(
@@ -702,22 +756,28 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         content_type: str,
         *,
         headers: dict[str, str] | None = None,
-    ) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header(
-            "Content-Security-Policy",
-            "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
-        )
-        for name, value in (headers or {}).items():
-            self.send_header(name, value)
-        self.end_headers()
-        self.wfile.write(body)
+    ) -> bool:
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+            )
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(body)
+            return True
+        except (BrokenPipeError, ConnectionResetError):
+            # Browser navigation and VPN reconnects can abandon an in-flight
+            # poll. This is not a collector or gateway failure.
+            return False
 
     def _json(self, status: int, value: Any) -> None:
         self._send(status, json.dumps(value, sort_keys=True).encode(), "application/json")

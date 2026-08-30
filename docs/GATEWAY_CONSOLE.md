@@ -94,10 +94,18 @@ Secret полетата показват само `Configured`/`Not configured`;
 да ги променя. При staging текущите secret стойности се запазват от защитената
 process environment, независимо че не присъстват в browser payload.
 
+Формата е контекстна: например gateway Node ID се показва само за fixed-unicast
+client, discovery tuning — само когато discovery е включено, а Basic-auth
+полетата — само при избран `basic` режим. `auto_multi_peer` фиксира Linux role
+на `hub`, а `broadcast` — на `client`. Панелът `Effective configuration`
+обобщава реалната топология, boundaries, discovery и LoRa policy преди
+Validate/Stage, за да не се разчита на скрити defaults.
+
 ## Events и alerts
 
 Console пази най-много 512 structured събития и 512 KiB. UI polling-ът е на пет
-секунди. Journal-ът съдържа само operational metadata за radio reconnect,
+секунди и има source/severity филтри. Announce observations са само в общия
+event journal, а не в дублиран отделен панел. Journal-ът съдържа само operational metadata за radio reconnect,
 peer/upstream transition, header-only LoRa announce observation, TX rejection,
 repair expiry, LXMD announce и config
 stage — никога RNS/LXMF payload, password или IFAC passphrase.
@@ -107,6 +115,12 @@ TX rejection/send failure, repair expiry/capping, stalled reassembly, upstream
 down/flapping, LXMD unavailable/storage pressure и collector failure. Исторически
 cumulative counter сам по себе си не оставя alert активен. Нормалното състояние
 се показва като зелено `No active alerts`.
+
+Meshtastic interface записва локален telemetry heartbeat на 10 секунди дори при
+напълно тих ефир. Този heartbeat е само atomic JSON write и **не** предизвиква
+LoRa/MQTT packet. Console различава `Radio transport: up` от
+`Radio activity: idle`; stale alert означава спрял collector/interface, а не
+липса на радио пакети.
 
 ## Validate, stage, apply и rollback
 
@@ -143,6 +157,17 @@ uv run rns-meshtastic gateway-validate \
 | `conservative` | 2.0 s | 32 fragments | 12/60 s | default за shared/community RF |
 | `balanced` | 1.0 s | 64 fragments | 18/60 s | контролирана private mesh |
 | `custom` | explicit | explicit | explicit | лаборатория, с видимо предупреждение |
+
+`conservative` и `balanced` са налагани profiles, а не подсказки: при избран
+именуван profile Console заключва expert pacing/queue/repair полетата и
+validator-ът заменя останали стари overrides с точните стойности от таблицата.
+Само `custom` приема ръчно зададени стойности.
+
+Reticulum има и по-ниско ниво announce/ingress/egress rate-control настройки.
+Те умишлено не са изведени като общи Console knobs: семантиката им влияе върху
+path discovery и изисква отделни regression тестове. Първата защита остава
+тестваният bridge scheduler, bounded queue/repair budget, peer announce-idle
+lease и стандартният Reticulum announce airtime cap.
 
 Независимо от профила bridge-ът никога не включва Meshtastic duty-cycle
 override. При public или private upstream radio interface е `internal`,
@@ -181,8 +206,8 @@ changes трябва да се наблюдават преди избор на u
 
 ## Announce visibility
 
-Console показва само header metadata за announce-и, които реално са приети от
-или подадени към Meshtastic интерфейса: destination hash, посока и radio peer.
+Console event journal показва само header metadata за announce-и, които реално
+са приети от или подадени към Meshtastic интерфейса: destination hash, посока и radio peer.
 Никога не се пазят payload или announce app-data. При radio IFAC заглавието е
 криптирано и UI изрично показва `opaque_ifac`; Reticulum route table остава
 авторитетният източник.
@@ -191,3 +216,9 @@ Console показва само header metadata за announce-и, които р�
 peer. Android bridge трябва първо да изпрати announce/frame, за да бъде създаден
 динамичният peer interface; след това се изпраща нов LAN announce. UI показва
 отделно състоянието, когато още няма научен radio peer.
+
+При спрян Android bridge наученият Meshtastic peer не може да бъде премахнат
+веднага, защото радиото и маршрутът може още да са валидни. След
+`RNS_PEER_ANNOUNCE_IDLE_SECONDS` UI показва `announce-idle`: Linux запазва peer-а
+и реалния Reticulum трафик, но не хаби airtime за обикновени периодични
+announces. Показва се и броят `announces saved`.

@@ -69,6 +69,7 @@ class RNSMeshtasticInterface(Interface):
     # otherwise identical IFAC key with a different on-wire size is rejected.
     DEFAULT_IFAC_SIZE = 16
     HW_MTU = 564
+    TELEMETRY_HEARTBEAT_SECONDS = 10.0
 
     def __init__(self, owner: Any, configuration: Any) -> None:
         super().__init__()
@@ -86,6 +87,7 @@ class RNSMeshtasticInterface(Interface):
             self.gateway_node = format_node_id(self.gateway_node)
         self.allowed_nodes = _node_set(_optional(config, "allowed_nodes"))
         self.max_peers = _int(config, "max_peers", 32)
+        self.peer_announce_idle_timeout = _float(config, "peer_announce_idle_timeout", 900.0)
         self.tx_interval = _float(config, "tx_interval", 1.0)
         self.max_queued_fragments = _int(config, "max_queued_fragments", 32)
         self.telemetry_file = _optional(config, "telemetry_file")
@@ -115,6 +117,7 @@ class RNSMeshtasticInterface(Interface):
         self._tx_sequence = itertools.count()
         self._telemetry_lock = threading.Lock()
         self._telemetry_last_write = 0.0
+        self._last_radio_activity_at: str | None = None
         self._telemetry = {
             "tx_frames_accepted": 0,
             "tx_frames_rejected": 0,
@@ -130,6 +133,7 @@ class RNSMeshtasticInterface(Interface):
             "backend_down": 0,
             "send_failures": 0,
             "opaque_ifac_frames": 0,
+            "idle_peer_announces_suppressed": 0,
         }
         self._observation_lock = threading.Lock()
         self._recent_announces: deque[dict[str, Any]] = deque(maxlen=64)
@@ -162,6 +166,8 @@ class RNSMeshtasticInterface(Interface):
             raise ValueError("gateway_role=hub is required for auto_multi_peer")
         if not 1 <= self.max_peers <= 512:
             raise ValueError("max_peers must be between 1 and 512")
+        if self.peer_announce_idle_timeout != 0 and not (300 <= self.peer_announce_idle_timeout <= 86_400):
+            raise ValueError("peer_announce_idle_timeout must be 0 or between 300 and 86400 seconds")
         if not 4 <= self.max_queued_fragments <= 1024:
             raise ValueError("max_queued_fragments must be between 4 and 1024")
         if self.tx_interval < 0:
@@ -179,9 +185,7 @@ class RNSMeshtasticInterface(Interface):
                 hop_limit=_int(config, "hop_limit", 3),
                 want_ack=_bool(config, "want_ack", False),
                 pki_required=_bool(config, "pki_required", False),
-                mqtt_forwarding_policy=str(
-                    config.get("mqtt_forwarding_policy", "inherit")
-                ).strip().lower(),
+                mqtt_forwarding_policy=str(config.get("mqtt_forwarding_policy", "inherit")).strip().lower(),
             )
             return NativeBackend(native)
 
@@ -278,6 +282,10 @@ class RNSMeshtasticInterface(Interface):
                 item = self._tx_queue.get(timeout=0.5)
             except queue.Empty:
                 self._queue_due_repairs()
+                if time.monotonic() - self._telemetry_last_write >= self.TELEMETRY_HEARTBEAT_SECONDS:
+                    # File-only liveness heartbeat. This does not enqueue or
+                    # transmit anything over Meshtastic/LoRa.
+                    self._write_telemetry(force=True)
                 continue
             try:
                 while not self._stop.is_set() and not self._backend_online.wait(timeout=1.0):
@@ -285,6 +293,7 @@ class RNSMeshtasticInterface(Interface):
                 if self._stop.is_set():
                     return
                 self.backend.send(item.transmission.payload, item.transmission.destination)
+                self._last_radio_activity_at = datetime.now(UTC).isoformat()
                 self._telemetry["tx_fragments"] += 1
                 self._telemetry["tx_fragment_bytes"] += len(item.transmission.payload)
                 if item.transmission.reason == "request":
@@ -360,10 +369,14 @@ class RNSMeshtasticInterface(Interface):
                     return
         self._telemetry["rx_fragments"] += 1
         self._telemetry["rx_fragment_bytes"] += len(payload)
+        self._last_radio_activity_at = datetime.now(UTC).isoformat()
+        if self._is_multi_peer_hub():
+            with self._peer_lock:
+                known_peer = self._peers.get(source)
+            if known_peer is not None:
+                known_peer.note_inbound()
         try:
-            result = self.protocol.receive(
-                source, payload, allow_control=not self._tx_queue.full()
-            )
+            result = self.protocol.receive(source, payload, allow_control=not self._tx_queue.full())
         except FragmentError as exc:
             RNS.log(f"{self}: ignored malformed fragment from {source}: {exc}", RNS.LOG_WARNING)
             return
@@ -380,6 +393,7 @@ class RNSMeshtasticInterface(Interface):
                 peer = self._get_or_create_peer(source)
                 if peer is None:
                     continue
+                peer.note_inbound()
                 peer.rxb += len(frame)
                 self.owner.inbound(frame, peer)
             else:
@@ -484,6 +498,10 @@ class RNSMeshtasticInterface(Interface):
                             "rx_bytes": int(peer.rxb),
                             "tx_bytes": int(peer.txb),
                             "online": bool(peer.online),
+                            "last_inbound_at": peer.last_inbound_at,
+                            "idle_seconds": round(peer.inbound_idle_seconds(), 1),
+                            "announce_delivery_state": peer.announce_delivery_state(),
+                            "ordinary_announces_suppressed": peer.ordinary_announces_suppressed,
                         }
                     )
             with self._observation_lock:
@@ -491,6 +509,8 @@ class RNSMeshtasticInterface(Interface):
             value = {
                 "schema": 1,
                 "captured_at": datetime.now(UTC).isoformat(),
+                "heartbeat_interval_seconds": self.TELEMETRY_HEARTBEAT_SECONDS,
+                "last_radio_activity_at": self._last_radio_activity_at,
                 "interface": self.name,
                 "online": bool(self.online),
                 "local_node_id": self.local_node_id,
@@ -570,9 +590,56 @@ class MeshtasticPeerInterface(Interface):
         self.IN = True
         self.OUT = True
         self.online = parent.online
+        self.last_inbound_monotonic = time.monotonic()
+        self.last_inbound_at = datetime.now(UTC).isoformat()
+        self.ordinary_announces_suppressed = 0
+        self._announce_suppression_active = False
+
+    def note_inbound(self) -> None:
+        self.last_inbound_monotonic = time.monotonic()
+        self.last_inbound_at = datetime.now(UTC).isoformat()
+        if self._announce_suppression_active:
+            self._announce_suppression_active = False
+            RNS.log(
+                f"{self}: inbound activity restored ordinary announce delivery",
+                RNS.LOG_NOTICE,
+            )
+
+    def inbound_idle_seconds(self) -> float:
+        return max(0.0, time.monotonic() - self.last_inbound_monotonic)
+
+    def announce_delivery_state(self) -> str:
+        timeout = self.parent_interface.peer_announce_idle_timeout
+        if timeout == 0 or self.inbound_idle_seconds() < timeout:
+            return "active"
+        if getattr(self.parent_interface, "ifac_key", None) is not None:
+            return "opaque_ifac"
+        return "ordinary_announces_suppressed"
+
+    def _should_suppress_ordinary_announce(self, data: bytes) -> bool:
+        timeout = self.parent_interface.peer_announce_idle_timeout
+        if timeout == 0 or self.inbound_idle_seconds() < timeout:
+            return False
+        metadata = parse_rns_frame(data)
+        # Only context-0 periodic announces are safe to suppress. Explicit
+        # PATH_RESPONSE announces and opaque IFAC frames continue unchanged.
+        if metadata is None or not metadata.is_announce or metadata.context != 0:
+            return False
+        self.ordinary_announces_suppressed += 1
+        self.parent_interface._telemetry["idle_peer_announces_suppressed"] += 1
+        if not self._announce_suppression_active:
+            self._announce_suppression_active = True
+            RNS.log(
+                f"{self}: suppressing ordinary announces after "
+                f"{int(self.inbound_idle_seconds())} seconds without inbound bridge traffic; "
+                "data, proofs and path responses remain enabled",
+                RNS.LOG_NOTICE,
+            )
+        self.parent_interface._write_telemetry()
+        return True
 
     def process_outgoing(self, data: bytes) -> None:
-        if self.online:
+        if self.online and not self._should_suppress_ordinary_announce(data):
             self.parent_interface._enqueue_frame(data, self.peer_node)
             self.txb += len(data)
 

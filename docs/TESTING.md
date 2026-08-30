@@ -267,6 +267,7 @@ mesh_mode = auto_multi_peer
 gateway_role = hub
 accept_broadcast_on_hub = Yes
 max_peers = 32
+peer_announce_idle_timeout = 900
 # allowed_nodes е optional; празно означава bounded open discovery
 ```
 
@@ -276,6 +277,13 @@ interface за source Node ID и последващият learned трафик �
 `RNS_MESH_MODE=auto_multi_peer`; renderer-ът задава broadcast acceptance
 автоматично. `gateway_unicast` hub остава fixed/allowlisted режим и не приема
 broadcast discovery.
+
+За тест на idle safeguard спрете Android bridge, но оставете Meshtastic радиото
+и LAN клиента включени. След configured timeout context-0 periodic announces не
+трябва да увеличават LoRa TX; Console трябва да покаже `announce-idle` и
+`announces saved`. Data/proof/path-response test frames трябва да продължат да
+минават. Стартирайте Android bridge и изпратете announce: peer state трябва да
+се върне на `active` без рестарт на Linux.
 
 Стартирайте gateway и изпратете първия файл **от client към gateway**. В gateway
 log трябва да се появи:

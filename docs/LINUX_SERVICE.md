@@ -79,6 +79,7 @@ RNS_GATEWAY_ROLE=hub
 RNS_GATEWAY_NODE=
 RNS_ALLOWED_NODES=
 RNS_MAX_PEERS=32
+RNS_PEER_ANNOUNCE_IDLE_SECONDS=900
 ```
 
 This is a first-class Linux hub mode, not broadcast compatibility mode. An
@@ -95,6 +96,15 @@ mode and means open radio discovery, bounded by `RNS_MAX_PEERS` (1–512, defaul
 uses broadcast on air, but non-allowlisted source radios are discarded before
 fragment reassembly or peer creation. `gateway_unicast`/`hub` continues to
 require a non-empty allowlist and continues to reject broadcast.
+
+Linux вижда състоянието на Meshtastic радиото, но няма надежден сигнал, че
+Android bridge приложението зад научен peer е натиснало `Stop`. Затова след 15
+минути без входящ port-76 трафик към peer-а default policy спира **само**
+обикновените context-0 периодични RNS announces към него. Data, proofs,
+link/path traffic, explicit path responses и IFAC-opaque frames продължават.
+Първият входящ frame след Android reconnect автоматично активира announce
+доставката. `RNS_PEER_ANNOUNCE_IDLE_SECONDS=0` изключва тази защита; други
+стойности са 300–86400 секунди.
 
 The TCP listener is published on host loopback by default. For a VPN address:
 
