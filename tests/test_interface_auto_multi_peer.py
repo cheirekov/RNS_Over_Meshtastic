@@ -101,6 +101,7 @@ def test_auto_multi_peer_discovers_broadcast_source_and_replies_by_unicast(monke
         assert frame == b"android announce"
         assert isinstance(peer, MeshtasticPeerInterface)
         assert peer.peer_node == "!a1b3b3b8"
+        assert peer.tunnel_id is None
 
         peer.process_outgoing(b"tcp client reply")
         assert backend.sent_event.wait(timeout=1.0)

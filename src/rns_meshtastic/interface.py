@@ -590,6 +590,13 @@ class MeshtasticPeerInterface(Interface):
         self.IN = True
         self.OUT = True
         self.online = parent.online
+        # A dynamically learned Meshtastic radio peer is a normal physical
+        # interface, not an RNS tunnel endpoint. Some Reticulum releases
+        # leave a non-null inherited ``tunnel_id`` here, which makes announce
+        # processing try to update a tunnel table entry that does not exist.
+        # Besides noisy warnings, that can degrade path bookkeeping during
+        # multi-peer discovery.
+        self.tunnel_id = None
         self.last_inbound_monotonic = time.monotonic()
         self.last_inbound_at = datetime.now(UTC).isoformat()
         self.ordinary_announces_suppressed = 0
