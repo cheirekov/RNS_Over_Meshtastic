@@ -33,6 +33,7 @@ from rns_meshtastic.contracts import (
     to_dict,
 )
 from rns_meshtastic.event_journal import EventJournal
+from rns_meshtastic.gateway_apply_queue import agent_status, queue_request
 from rns_meshtastic.gateway_config import (
     MANAGED_FIELDS,
     environment_from_process,
@@ -217,11 +218,13 @@ class GatewayState:
         *,
         control_socket: Path | None = None,
         event_file: Path | None = None,
+        apply_dir: Path | None = None,
     ) -> None:
         self.config_dir = config_dir
         self.lxmd_dir = lxmd_dir
         self.stage_dir = stage_dir
         self.control_socket = control_socket or config_dir / "lxmd-control.sock"
+        self.apply_dir = apply_dir or config_dir / "gateway-apply"
         self.events = EventJournal(event_file or config_dir / "gateway-events.jsonl")
         self._lock = threading.RLock()
         self._cached_lxmd: tuple[float, dict[str, Any]] = (0.0, {})
@@ -861,13 +864,21 @@ class GatewayState:
         self.events.append("console", "info", "configuration_staged", f"Staged configuration {target.name}")
         return validation | {
             "stage_id": target.name,
-            "export_command": "umask 077; docker compose --env-file .env.linux-service "
-            "-f compose.linux.yaml run --rm gateway-console "
-            f"rns-meshtastic gateway-export --stage-file {target} > .env.pending",
-            "apply_command": "uv run rns-meshtastic gateway-apply "
-            "--stage-file .env.pending --target .env.linux-service "
-            "--compose-file compose.linux.yaml",
+            "apply_agent": self.apply_status(),
         }
+
+    def apply_status(self) -> dict[str, Any]:
+        return {"schema": 1} | agent_status(self.apply_dir)
+
+    def request_apply(self, stage_id: str) -> dict[str, Any]:
+        request = queue_request(self.apply_dir, self.stage_dir, stage_id)
+        self.events.append(
+            "console",
+            "warning",
+            "configuration_apply_queued",
+            f"Queued configuration apply {request['request_id']} for {request['stage_id']}",
+        )
+        return request
 
     def announce_lxmd(self) -> dict[str, Any]:
         value = lxmd_control_request(self.control_socket, "announce")
@@ -1011,6 +1022,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self._json(200, {"schema": 1, "values": self.state.public_environment()})
             elif path == "/api/v1/config/schema":
                 self._json(200, config_schema())
+            elif path == "/api/v1/config/apply":
+                self._json(200, self.state.apply_status())
             elif path == "/api/v1/events":
                 query = parse_qs(parsed.query)
                 self._json(
@@ -1040,7 +1053,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if not self._require_authentication():
             return
-        if path not in {"/api/v1/config/validate", "/api/v1/config/stage", "/api/v1/lxmd/announce"}:
+        if path not in {
+            "/api/v1/config/validate",
+            "/api/v1/config/stage",
+            "/api/v1/config/apply",
+            "/api/v1/lxmd/announce",
+        }:
             self._json(404, {"error": "not found"})
             return
         try:
@@ -1057,6 +1075,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 if result.get("status") == "error":
                     status = 503
                 self._json(status, result)
+                return
+            if path == "/api/v1/config/apply":
+                stage_id = value.get("stage_id")
+                if not isinstance(stage_id, str):
+                    raise ValueError("stage_id is required")
+                self._json(202, self.state.request_apply(stage_id))
                 return
             result = self.state.stage(value) if path.endswith("/stage") else self.state.validate(value)
             self._json(200, result)

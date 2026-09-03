@@ -127,6 +127,8 @@ services:
       - /data/lxmd
       - --stage-dir
       - /data/rns/gateway-staged
+      - --apply-dir
+      - /data/rns/gateway-apply
     network_mode: service:rnsd
     depends_on:
       rnsd:

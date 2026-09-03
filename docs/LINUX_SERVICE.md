@@ -1,6 +1,6 @@
 # Optional Linux transport and LXMF propagation service
 
-For the 0.5.0 operator UI, policy profiles, metrics and explicit staged
+For the 0.6.0 operator UI, policy profiles, metrics and staged one-tap apply
 apply/rollback workflow, see [GATEWAY_CONSOLE.md](GATEWAY_CONSOLE.md).
 
 This profile runs two separate processes without installing RNS, LXMF or the

@@ -1,4 +1,12 @@
-# Roadmap след 0.5.1
+# Roadmap след 0.6.0
+
+## Завършено в Linux Console 0.6.0
+
+- Phone-friendly `Validate → Stage → Apply & restart` с видим live status.
+- Тесен host-side agent без `uv` dependency и без Docker socket в Console.
+- Фиксирани targets/services, opaque stage IDs, single-flight queue, backup,
+  health validation и автоматичен rollback.
+- Еднократна systemd user инсталация и structured apply lifecycle events.
 
 ## Завършено в Linux Console 0.5.1
 

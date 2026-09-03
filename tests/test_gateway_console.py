@@ -1,5 +1,6 @@
 import base64
 import http.client
+import json
 import threading
 from datetime import UTC, datetime, timedelta
 from http.server import ThreadingHTTPServer
@@ -312,6 +313,39 @@ def test_console_basic_auth_protects_ui_but_not_minimal_health():
         credentials = base64.b64encode(b"operator:correct-horse-battery-staple").decode()
         connection.request("GET", "/", headers={"Authorization": f"Basic {credentials}"})
         assert connection.getresponse().status == 200
+        connection.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+
+
+def test_apply_endpoint_is_same_origin_and_only_passes_stage_id():
+    class State:
+        @staticmethod
+        def request_apply(stage_id):
+            return {"state": "queued", "stage_id": stage_id, "request_id": "0123456789abcdef"}
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ConsoleHandler)
+    server.gateway_state = State()
+    server.console_auth_mode = "off"
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+        body = json.dumps({"stage_id": "gateway-20260903T120000.123456Z.env"})
+        headers = {"Content-Type": "application/json", "Origin": "https://attacker.example"}
+        connection.request("POST", "/api/v1/config/apply", body=body, headers=headers)
+        response = connection.getresponse()
+        assert response.status == 403
+        response.read()
+
+        origin = f"http://127.0.0.1:{server.server_port}"
+        headers["Origin"] = origin
+        connection.request("POST", "/api/v1/config/apply", body=body, headers=headers)
+        response = connection.getresponse()
+        assert response.status == 202
+        assert json.loads(response.read())["state"] == "queued"
         connection.close()
     finally:
         server.shutdown()

@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# Host-side, narrowly scoped configuration apply agent for Gateway Console.
+set -u
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+project_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
+env_file="$project_dir/.env.linux-service"
+compose_file="$project_dir/compose.linux.yaml"
+control_dir=/data/rns/gateway-apply
+stage_dir=/data/rns/gateway-staged
+
+find_docker() {
+    if command -v docker >/dev/null 2>&1; then
+        command -v docker
+    elif [ -x /run/current-system/sw/bin/docker ]; then
+        printf '%s\n' /run/current-system/sw/bin/docker
+    else
+        return 1
+    fi
+}
+
+docker_bin=$(find_docker) || {
+    echo "Docker CLI was not found in PATH or /run/current-system/sw/bin" >&2
+    exit 1
+}
+
+compose() {
+    "$docker_bin" compose --env-file "$env_file" -f "$compose_file" "$@"
+}
+
+control() {
+    compose exec -T gateway-console rns-meshtastic gateway-apply-control \
+        "$@" --control-dir "$control_dir"
+}
+
+healthy() {
+    compose exec -T gateway-console python -c \
+        'import os,urllib.request; p=os.environ.get("RNS_CONSOLE_PORT","8787"); urllib.request.urlopen("http://127.0.0.1:"+p+"/healthz",timeout=3).read()' \
+        >/dev/null 2>&1
+}
+
+report_failure() {
+    local request_id=$1 message=$2 backup=${3:-}
+    if [ -n "$backup" ]; then
+        control fail --agent-id "$agent_id" --request-id "$request_id" \
+            --message "$message" --backup "$backup" >/dev/null 2>&1 || true
+    else
+        control fail --agent-id "$agent_id" --request-id "$request_id" \
+            --message "$message" >/dev/null 2>&1 || true
+    fi
+}
+
+apply_request() {
+    local request_id=$1 stage_id=$2
+    local pending="$project_dir/.env.pending-$request_id"
+    local backup="$env_file.backup-$(date -u +%Y%m%dT%H%M%SZ)"
+    local stage_path="$stage_dir/$stage_id"
+
+    case "$request_id:$stage_id" in
+        [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]:gateway-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]Z.env) ;;
+        *) report_failure "$request_id" "Apply request failed safety validation"; return 1 ;;
+    esac
+
+    umask 077
+    if ! compose exec -T gateway-console rns-meshtastic gateway-export \
+        --stage-dir "$stage_dir" --stage-file "$stage_path" >"$pending"; then
+        rm -f -- "$pending"
+        report_failure "$request_id" "Could not export the staged configuration"
+        return 1
+    fi
+    if ! "$docker_bin" compose --env-file "$pending" -f "$compose_file" config --quiet; then
+        rm -f -- "$pending"
+        report_failure "$request_id" "Docker Compose rejected the staged configuration"
+        return 1
+    fi
+    if ! cp -p -- "$env_file" "$backup" || ! mv -- "$pending" "$env_file"; then
+        rm -f -- "$pending"
+        report_failure "$request_id" "Could not back up or replace the active environment"
+        return 1
+    fi
+
+    if compose up -d --force-recreate rnsd lxmd gateway-console >/dev/null; then
+        for _attempt in $(seq 1 60); do
+            if healthy; then
+                control complete --agent-id "$agent_id" --request-id "$request_id" \
+                    --message "Configuration applied; all managed services are healthy" \
+                    --backup "$backup" >/dev/null
+                echo "Applied $stage_id; backup $(basename -- "$backup")"
+                return 0
+            fi
+            sleep 2
+        done
+    fi
+
+    cp -p -- "$backup" "$env_file"
+    compose up -d --force-recreate rnsd lxmd gateway-console >/dev/null 2>&1 || true
+    for _attempt in $(seq 1 30); do
+        healthy && break
+        sleep 2
+    done
+    report_failure "$request_id" "Health check failed; previous configuration was restored" "$backup"
+    echo "Apply failed for $stage_id; restored $(basename -- "$backup")" >&2
+    return 1
+}
+
+run_agent() {
+    [ -f "$env_file" ] || { echo "Missing $env_file" >&2; exit 1; }
+    [ -f "$compose_file" ] || { echo "Missing $compose_file" >&2; exit 1; }
+    agent_id=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+    echo "Gateway apply agent $agent_id watching $project_dir"
+    while true; do
+        output=$(control claim --agent-id "$agent_id" 2>/dev/null) || output=""
+        if [[ "$output" == $'CLAIM\t'* ]]; then
+            IFS=$'\t' read -r marker request_id stage_id <<<"$output"
+            [ "$marker" = CLAIM ] && apply_request "$request_id" "$stage_id" || true
+        fi
+        sleep 5
+    done
+}
+
+install_agent() {
+    command -v systemctl >/dev/null 2>&1 || {
+        echo "systemctl is unavailable; run '$0 run' under your service manager" >&2
+        exit 1
+    }
+    config_root=${XDG_CONFIG_HOME:-${HOME}/.config}
+    bash_bin=$(command -v bash)
+    unit_dir="$config_root/systemd/user"
+    unit_file="$unit_dir/rns-meshtastic-gateway-apply.service"
+    mkdir -p -- "$unit_dir"
+    umask 077
+    {
+        printf '%s\n' '[Unit]'
+        printf '%s\n' 'Description=RNS Meshtastic Gateway configuration apply agent'
+        printf '%s\n' 'After=docker.service'
+        printf '%s\n' '[Service]'
+        printf '%s\n' 'Environment="PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
+        printf 'WorkingDirectory="%s"\n' "$project_dir"
+        printf 'ExecStart="%s" "%s" run\n' "$bash_bin" "$script_dir/gateway-apply-agent"
+        printf '%s\n' 'Restart=always' 'RestartSec=5'
+        printf '%s\n' '[Install]' 'WantedBy=default.target'
+    } >"$unit_file"
+    systemctl --user daemon-reload
+    systemctl --user enable --now rns-meshtastic-gateway-apply.service
+    echo "Installed and started $unit_file"
+    echo "The Console Apply & restart button will become available within 10 seconds."
+}
+
+case "${1:-}" in
+    run) run_agent ;;
+    install) install_agent ;;
+    *) echo "Usage: $0 {install|run}" >&2; exit 2 ;;
+esac

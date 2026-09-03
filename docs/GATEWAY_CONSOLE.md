@@ -1,9 +1,10 @@
 # Linux Gateway Console
 
 Gateway Console е непривилегирован sidecar за наблюдение и безопасно
-подготвяне на конфигурации. Той не е част от `rnsd`, няма Docker socket и не
-може да рестартира услугите от браузъра. По подразбиране се публикува само на
-`127.0.0.1:8787`.
+подготвяне на конфигурации. Той не е част от `rnsd` и няма Docker socket.
+Опционален тесен host agent позволява **Apply & restart** от браузър или телефон,
+без да дава на web контейнера общ достъп до Docker. По подразбиране Console се
+публикува само на `127.0.0.1:8787`.
 
 ## Стартиране
 
@@ -18,7 +19,21 @@ RNS_PUBLIC_DISCOVERY=off
 docker compose --env-file .env.linux-service -f compose.linux.yaml \
   up -d --build rnsd lxmd gateway-console
 curl --fail http://127.0.0.1:8787/healthz
+./scripts/gateway-apply-agent install
 ```
+
+Последната команда е еднократна. Тя инсталира systemd user service от текущия
+repository path, използващ съществуващото Docker право на gateway оператора.
+След най-много 10 секунди панелът за
+конфигурация показва зелено `One-tap apply agent is ready`. Проверка:
+
+```bash
+systemctl --user status rns-meshtastic-gateway-apply.service
+```
+
+Ако user services трябва да продължат след logout, администраторът еднократно
+разрешава linger за gateway потребителя. Това не е необходимо на системи,
+където user manager вече остава активен.
 
 От отдалечен администратор използвайте VPN или SSH tunnel, вместо да
 публикувате Console в интернет:
@@ -74,13 +89,16 @@ Policy listener-ът проверява адреса преди да създа�
 interface. Съществуващите IFAC настройки остават отделният криптографски
 контрол; IP/CIDR policy не ги замества.
 
-## Read-only API и metrics
+## API и metrics
 
 - `GET /api/v1/capabilities`
 - `GET /api/v1/status`
 - `GET /api/v1/config` — само allowlisted полета; secrets са redacted
 - `GET /api/v1/config/schema` — всички управлявани полета, типове, defaults,
   граници, препоръчителни стойности и contextual help
+- `GET /api/v1/config/apply` — host agent availability и последен apply status
+- `POST /api/v1/config/apply` — поставя само конкретен Console `stage_id` в
+  bounded apply queue
 - `GET /api/v1/events?after=CURSOR&limit=100` — ограничен structured journal
 - `GET /api/v1/lxmd/qr`
 - `POST /api/v1/lxmd/announce` — operator-triggered propagation announce
@@ -90,7 +108,8 @@ interface. Съществуващите IFAC настройки остават �
 HTTP отговорите не съдържат IFAC passphrases. Request body никога не се пише в
 HTTP log. Prometheus endpoint-ът съдържа само counters, availability и queue
 occupancy. Mutating endpoint-ите приемат само JSON, проверяват browser origin и
-имат 64-KiB body limit. Console няма apply/restart права.
+имат 64-KiB body limit. Console няма Docker socket, shell или произволни
+apply/restart права.
 
 ## Manual LXMD announce
 
@@ -155,30 +174,40 @@ LoRa/MQTT packet. Console различава `Radio transport: up` от
 
 ## Validate, stage, apply и rollback
 
-Browser-ът може да валидира и да създаде номериран stage, но не изпълнява
-restart. След `Stage configuration` UI показва две команди:
+Нормалният workflow, включително от телефон, е:
+
+1. `Validate` показва warnings и точния diff.
+2. `Stage configuration` създава immutable номериран stage, без да променя
+   работещите услуги.
+3. `Apply & restart` показва confirmation и изпраща само opaque `stage_id`.
+4. Host agent валидира stage-а и Compose конфигурацията, създава backup на
+   `.env.linux-service`, рестартира само `rnsd`, `lxmd` и `gateway-console` и
+   чака health check.
+5. При неуспех agent-ът връща backup-а и стартира предишната конфигурация.
+
+Apply status остава в UI след краткото прекъсване на Console, а start/success/
+rollback събитията се пазят в structured event journal. Backup-ът е mode `0600`
+и UI показва само неговото име, не host path.
+
+Firewall/VPN и Basic authentication защитават достъпа на оператора, но не са
+причина web процесът да получи root-equivalent Docker socket. Host agent-ът е
+отделната privilege boundary: приема само stage име с фиксиран формат, работи
+само в repository path-а, използва фиксирани Compose services и няма endpoint
+за произволна команда или path.
+
+Ако host-ът няма systemd user services, agent-ът може да бъде пуснат от друг
+service manager с единствената foreground команда:
 
 ```bash
-umask 077
-docker compose --env-file .env.linux-service -f compose.linux.yaml run --rm \
-  gateway-console rns-meshtastic gateway-export \
-  --stage-file /data/rns/gateway-staged/gateway-TIMESTAMP.env > .env.pending
-
-uv run rns-meshtastic gateway-apply \
-  --stage-file .env.pending \
-  --target .env.linux-service \
-  --compose-file compose.linux.yaml
+./scripts/gateway-apply-agent run
 ```
-
-`gateway-apply` прави backup, рендира конфигурацията, стартира `rnsd`, `lxmd` и
-Console и чака health endpoint. При неуспех връща предишния env и отново
-стартира предишната конфигурация. Backup-ът остава с mode `0600`.
 
 Самостоятелна проверка без UI:
 
 ```bash
-uv run rns-meshtastic gateway-validate \
-  --env-file .env.linux-service --json
+docker compose --env-file .env.linux-service -f compose.linux.yaml run --rm \
+  -v "$PWD/.env.linux-service:/tmp/gateway.env:ro" gateway-console \
+  rns-meshtastic gateway-validate --env-file /tmp/gateway.env --json
 ```
 
 ## LoRa policy

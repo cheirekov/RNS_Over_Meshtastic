@@ -400,7 +400,12 @@ def _gateway_console(args: argparse.Namespace) -> int:
     from rns_meshtastic.gateway_config import validate_gateway_environment
     from rns_meshtastic.gateway_console import GatewayState, serve
 
-    state = GatewayState(Path(args.config_dir), Path(args.lxmd_dir), Path(args.stage_dir))
+    state = GatewayState(
+        Path(args.config_dir),
+        Path(args.lxmd_dir),
+        Path(args.stage_dir),
+        apply_dir=Path(args.apply_dir),
+    )
     try:
         validated = validate_gateway_environment(os.environ).values
     except ValueError as error:
@@ -474,6 +479,64 @@ def _gateway_apply(args: argparse.Namespace) -> int:
         print(f"gateway apply failed and was rolled back: {error}", file=sys.stderr)
         return 1
     print(f"gateway configuration applied; backup: {backup}")
+    return 0
+
+
+def _gateway_apply_control(args: argparse.Namespace) -> int:
+    """Narrow machine interface used by the host apply agent."""
+    from rns_meshtastic.event_journal import EventJournal
+    from rns_meshtastic.gateway_apply_queue import (
+        agent_status,
+        claim_request,
+        complete_request,
+        heartbeat,
+    )
+
+    directory = Path(args.control_dir)
+    events = EventJournal(Path(args.event_file))
+    try:
+        if args.action == "heartbeat":
+            heartbeat(directory, args.agent_id)
+            print("OK")
+        elif args.action == "claim":
+            request = claim_request(directory, args.agent_id)
+            if request is None:
+                print("NONE")
+            else:
+                print(f"CLAIM\t{request['request_id']}\t{request['stage_id']}")
+                events.append(
+                    "console",
+                    "warning",
+                    "configuration_apply_started",
+                    f"Applying configuration {request['request_id']} for {request['stage_id']}",
+                )
+        elif args.action in {"complete", "fail"}:
+            heartbeat(directory, args.agent_id)
+            result = complete_request(
+                directory,
+                args.request_id,
+                succeeded=args.action == "complete",
+                message=args.message,
+                backup=args.backup,
+            )
+            print(result["state"].upper())
+            events.append(
+                "console",
+                "info" if args.action == "complete" else "error",
+                "configuration_apply_succeeded"
+                if args.action == "complete"
+                else "configuration_apply_rolled_back",
+                f"Configuration apply {args.request_id}: {result['message']}",
+            )
+        elif args.action == "status":
+            import json
+
+            print(json.dumps(agent_status(directory), sort_keys=True))
+        else:  # pragma: no cover - argparse constrains this
+            raise ValueError("unsupported apply control action")
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"apply control failed: {error}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -557,6 +620,7 @@ def build_parser() -> argparse.ArgumentParser:
     console.add_argument("--config-dir", default="/data/rns")
     console.add_argument("--lxmd-dir", default="/data/lxmd")
     console.add_argument("--stage-dir", default="/data/rns/gateway-staged")
+    console.add_argument("--apply-dir", default="/data/rns/gateway-apply")
     console.set_defaults(func=_gateway_console)
 
     lxmd = sub.add_parser("lxmd-managed", help="run LXMD with a narrow local status/announce control socket")
@@ -581,6 +645,16 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--health-url", default="http://127.0.0.1:8787/healthz")
     apply.add_argument("--timeout", type=float, default=120.0)
     apply.set_defaults(func=_gateway_apply)
+
+    control = sub.add_parser("gateway-apply-control", help=argparse.SUPPRESS)
+    control.add_argument("action", choices=("heartbeat", "claim", "complete", "fail", "status"))
+    control.add_argument("--control-dir", default="/data/rns/gateway-apply")
+    control.add_argument("--event-file", default="/data/rns/gateway-events.jsonl")
+    control.add_argument("--agent-id", default="")
+    control.add_argument("--request-id", default="")
+    control.add_argument("--message", default="")
+    control.add_argument("--backup")
+    control.set_defaults(func=_gateway_apply_control)
     return parser
 
 
