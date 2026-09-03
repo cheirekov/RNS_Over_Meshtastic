@@ -1,0 +1,3 @@
+from rns_meshtastic.lan_policy import PolicyTCPServerInterface
+
+interface_class = PolicyTCPServerInterface

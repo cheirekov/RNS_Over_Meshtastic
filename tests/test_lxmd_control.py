@@ -19,8 +19,27 @@ class _Router:
             "uptime": 12,
             "messagestore": {"count": 2, "bytes": 1024, "limit": 4096},
             "total_peers": 1,
+            "static_peers": 1,
+            "discovered_peers": 0,
+            "max_peers": 20,
+            "clients": {
+                "client_propagation_messages_received": 7,
+                "client_propagation_messages_served": 11,
+            },
             "unpeered_propagation_rx_bytes": 30,
-            "peers": {bytes.fromhex("33" * 16): {"rx_bytes": 70, "tx_bytes": 80}},
+            "peers": {
+                bytes.fromhex("33" * 16): {
+                    "name": "Test peer",
+                    "type": "static",
+                    "alive": True,
+                    "last_heard": 1234,
+                    "network_distance": 2,
+                    "rx_bytes": 70,
+                    "tx_bytes": 80,
+                    "acceptance_rate": 95,
+                    "messages": {"offered": 4, "outgoing": 3, "incoming": 2, "unhandled": 1},
+                }
+            },
         }
 
     def announce_propagation_node(self):
@@ -40,6 +59,11 @@ def test_lxmd_controller_reports_real_peer_traffic_and_rate_limits(tmp_path: Pat
     assert status["traffic"]["rx_bytes"] == 100
     assert status["traffic"]["tx_bytes"] == 80
     assert status["store_utilisation_percent"] == 25.0
+    assert status["client_activity"]["messages_received"] == 7
+    assert status["client_activity"]["messages_served"] == 11
+    assert status["client_activity"]["unique_clients_available"] is False
+    assert status["peering"]["active"] == 1
+    assert status["peering"]["peers"][0]["identity_hash"] == "33" * 16
 
     first = controller.announce()
     assert router.announces == 1

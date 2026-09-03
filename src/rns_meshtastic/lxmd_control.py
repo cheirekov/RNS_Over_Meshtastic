@@ -91,6 +91,30 @@ class LXMDController:
         store = stats.get("messagestore") if isinstance(stats.get("messagestore"), dict) else {}
         store_bytes = int(store.get("bytes", 0) or 0)
         store_limit = int(store.get("limit", 0) or 0)
+        clients = stats.get("clients") if isinstance(stats.get("clients"), dict) else {}
+        peer_details = []
+        for peer_hash, raw in peers.items():
+            if not isinstance(raw, dict):
+                continue
+            messages = raw.get("messages") if isinstance(raw.get("messages"), dict) else {}
+            peer_details.append(
+                {
+                    "identity_hash": _hex(peer_hash),
+                    "name": str(raw.get("name") or "unnamed peer")[:128],
+                    "type": str(raw.get("type") or "unknown"),
+                    "alive": bool(raw.get("alive")),
+                    "last_heard_at": int(raw.get("last_heard", 0) or 0) or None,
+                    "network_distance": raw.get("network_distance"),
+                    "rx_bytes": int(raw.get("rx_bytes", 0) or 0),
+                    "tx_bytes": int(raw.get("tx_bytes", 0) or 0),
+                    "acceptance_rate": raw.get("acceptance_rate"),
+                    "messages": {
+                        key: int(messages.get(key, 0) or 0)
+                        for key in ("offered", "outgoing", "incoming", "unhandled")
+                    },
+                }
+            )
+        peer_details.sort(key=lambda value: (not value["alive"], value["name"], value["identity_hash"] or ""))
         last_manual = self._last_manual_announce()
         return {
             "schema": 1,
@@ -105,6 +129,24 @@ class LXMDController:
                 round(100.0 * store_bytes / store_limit, 1) if store_limit else None
             ),
             "peer_count": int(stats.get("total_peers", 0) or 0),
+            "peering": {
+                "total": int(stats.get("total_peers", 0) or 0),
+                "active": sum(1 for peer in peer_details if peer["alive"]),
+                "static": int(stats.get("static_peers", 0) or 0),
+                "discovered": int(stats.get("discovered_peers", 0) or 0),
+                "maximum": stats.get("max_peers"),
+                "peers": peer_details,
+            },
+            "client_activity": {
+                "messages_received": int(
+                    clients.get("client_propagation_messages_received", 0) or 0
+                ),
+                "messages_served": int(
+                    clients.get("client_propagation_messages_served", 0) or 0
+                ),
+                "unique_clients_available": False,
+                "source": "lxmd.compile_stats.clients",
+            },
             "traffic": {
                 "rx_bytes": rx_bytes,
                 "tx_bytes": tx_bytes,

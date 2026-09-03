@@ -39,11 +39,13 @@ $RNS_DISCOVERY_BLOCK
 $RNS_RADIO_IFAC_BLOCK
 
   [[LAN VPN Reticulum clients]]
-    type = TCPServerInterface
+    type = PolicyTCPServerInterface
     enabled = Yes
     mode = $RNS_LAN_INTERFACE_MODE
     listen_ip = 0.0.0.0
     listen_port = $RNS_TCP_LISTEN_PORT
+    allow_networks = $RNS_LAN_ALLOWLIST
+    deny_networks = $RNS_LAN_DENYLIST
 
 $RNS_TCP_IFAC_BLOCK
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 from collections.abc import Mapping
@@ -15,6 +16,7 @@ RADIO_PEER_TYPE = "MeshtasticPeerInterface"
 PUBLIC_NAME_PREFIX = "Public boundary "
 PRIVATE_UPSTREAM_NAME_PREFIX = "Private boundary "
 PRIVATE_TCP_NAME = "LAN VPN Reticulum clients"
+LAN_CLIENT_ENDPOINT = re.compile(r"/(?:\[([^]]+)\]|([^/\]]+)):(\d+)\]$")
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,32 @@ def _counter(interface: Mapping[str, Any]) -> TrafficCounter:
         rxs=float(interface.get("rxs", 0) or 0),
         txs=float(interface.get("txs", 0) or 0),
     )
+
+
+def _lan_client(interface: Mapping[str, Any]) -> dict[str, Any] | None:
+    parent = str(interface.get("parent_interface_name") or "")
+    short_name = str(interface.get("short_name") or "")
+    if PRIVATE_TCP_NAME not in parent or short_name != f"Client on {PRIVATE_TCP_NAME}":
+        return None
+    match = LAN_CLIENT_ENDPOINT.search(str(interface.get("name") or ""))
+    if match is None:
+        return None
+    host = match.group(1) or match.group(2)
+    counter = _counter(interface)
+    return {
+        "session_id": str(interface.get("hash") or f"{host}:{match.group(3)}"),
+        "source_ip": host,
+        "source_port": int(match.group(3)),
+        "up": bool(interface.get("status", True)),
+        "rx": counter.rx,
+        "tx": counter.tx,
+        "rxs": counter.rxs,
+        "txs": counter.txs,
+        "incoming_announce_frequency": float(
+            interface.get("incoming_announce_frequency", 0) or 0
+        ),
+        "incoming_path_request_frequency": float(interface.get("incoming_pr_frequency", 0) or 0),
+    }
 
 
 def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
@@ -81,6 +109,8 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
     private_upstream_total = TrafficCounter()
     private_total = TrafficCounter()
     private_client_count = 0
+    lan_clients: list[dict[str, Any]] = []
+    lan_policy: dict[str, Any] = {"blocked_connections": 0, "deny_networks": []}
     autoconnected_interfaces: list[dict[str, Any]] = []
     for item in interfaces:
         short_name = str(item.get("short_name") or "")
@@ -94,8 +124,14 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
             private_upstreams[short_name] = counter.as_dict() | {"up": bool(item.get("status"))}
         elif short_name == PRIVATE_TCP_NAME and not item.get("parent_interface_name"):
             private_total = private_total.add(_counter(item))
-        elif item.get("parent_interface_name") == PRIVATE_TCP_NAME:
+            lan_policy = {
+                "blocked_connections": int(item.get("blocked_ips", 0) or 0),
+                "deny_networks": [str(value) for value in item.get("blocked_ip_list", [])],
+            }
+        client = _lan_client(item)
+        if client is not None:
             private_client_count += 1
+            lan_clients.append(client)
         if item.get("autoconnect_source"):
             # Keep this deliberately small. The Console must be able to explain
             # which discovered boundary Reticulum actually opened, without
@@ -124,6 +160,8 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
         "radio_parent_count": len(radio_parents),
         "radio_peer_count": len(radio_peers),
         "private_tcp_client_count": private_client_count,
+        "lan_clients": lan_clients,
+        "lan_policy": lan_policy,
         "autoconnected_interfaces": autoconnected_interfaces,
     }
 

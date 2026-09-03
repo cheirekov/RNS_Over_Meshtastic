@@ -41,6 +41,15 @@ def test_conservative_profile_applies_bounded_defaults():
     assert result.values["LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS"] == "900"
 
 
+def test_lan_address_policy_is_normalised_and_invalid_networks_are_rejected():
+    result = validate_gateway_environment(
+        environment() | {"RNS_LAN_ALLOWLIST": "10.8.0.5, 2001:db8::/32"}
+    )
+    assert result.values["RNS_LAN_ALLOWLIST"] == "10.8.0.5/32,2001:db8::/32"
+    with pytest.raises(ValueError, match="RNS_LAN_DENYLIST"):
+        validate_gateway_environment(environment() | {"RNS_LAN_DENYLIST": "not-a-network"})
+
+
 def test_named_policy_replaces_stale_expert_overrides():
     result = validate_gateway_environment(
         environment()

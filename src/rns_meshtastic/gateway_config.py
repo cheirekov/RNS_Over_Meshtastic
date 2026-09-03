@@ -71,6 +71,8 @@ MANAGED_FIELDS = (
     "RNS_TCP_IFAC_PASSPHRASE",
     "RNS_TCP_PUBLISH_IP",
     "RNS_TCP_LISTEN_PORT",
+    "RNS_LAN_ALLOWLIST",
+    "RNS_LAN_DENYLIST",
     "RNS_LOGLEVEL",
     "RNS_CONSOLE_PUBLISH_IP",
     "RNS_CONSOLE_PORT",
@@ -167,6 +169,16 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
         raise ValueError("trusted_auto discovery requires RNS_DISCOVERY_SOURCES")
     values["RNS_PUBLIC_DISCOVERY"] = discovery
     values["RNS_DISCOVERY_SOURCES"] = ",".join(sources)
+
+    for name in ("RNS_LAN_ALLOWLIST", "RNS_LAN_DENYLIST"):
+        raw = [item.strip() for item in values.get(name, "").split(",") if item.strip()]
+        try:
+            networks = [str(ipaddress.ip_network(item, strict=False)) for item in raw]
+        except ValueError as error:
+            raise ValueError(f"{name} must contain IPv4/IPv6 addresses or CIDR networks") from error
+        if len(set(networks)) != len(networks):
+            raise ValueError(f"{name} cannot contain duplicate networks")
+        values[name] = ",".join(networks)
 
     console_mode = values.get("RNS_CONSOLE_AUTH_MODE", "off").lower()
     if console_mode not in {"off", "basic"}:

@@ -80,6 +80,8 @@ def _empty_traffic() -> dict[str, Any]:
         "public_interfaces": {},
         "private_interfaces": {},
         "private_tcp_client_count": 0,
+        "lan_clients": [],
+        "lan_policy": {"blocked_connections": 0, "deny_networks": []},
     }
 
 
@@ -224,6 +226,9 @@ class GatewayState:
         self._lock = threading.RLock()
         self._cached_lxmd: tuple[float, dict[str, Any]] = (0.0, {})
         self._upstream_observations: dict[str, dict[str, Any]] = {}
+        self._lan_session_observations: dict[str, dict[str, Any]] = {}
+        self._active_lan_sessions: set[str] = set()
+        self._previous_lan_blocked_connections: int | None = None
         self._previous_radio_online: bool | None = None
         self._previous_telemetry_counters: dict[str, int] = {}
         self._previous_reassembly: dict[str, int] = {}
@@ -310,6 +315,8 @@ class GatewayState:
         enhanced_private_upstreams = self._observe_upstreams(
             traffic.get("private_interfaces", {}), source="private"
         )
+        lan_clients = self._observe_lan_clients(traffic.get("lan_clients", []))
+        self._observe_lan_policy(traffic.get("lan_policy", {}))
         for name, upstream in enhanced_upstreams.items():
             if not upstream.get("up"):
                 alerts.append(BridgeAlertV1("warning", "public_upstream_down", f"{name} is down"))
@@ -426,6 +433,10 @@ class GatewayState:
         return to_dict(status) | {
             "traffic": traffic_snapshot,
             "lan_client_count": int(traffic.get("private_tcp_client_count", 0) or 0),
+            "lan_clients": lan_clients,
+            "lan_policy": traffic.get(
+                "lan_policy", {"blocked_connections": 0, "deny_networks": []}
+            ),
             "queue_pressure_percent": round(queue_pressure * 100, 1),
             "telemetry_age_seconds": round(telemetry_age, 1) if telemetry_age is not None else None,
             "telemetry_stale_after_seconds": telemetry_stale_after,
@@ -707,6 +718,75 @@ class GatewayState:
                 }
         return enhanced
 
+    def _observe_lan_clients(self, clients: Any) -> list[dict[str, Any]]:
+        if not isinstance(clients, list):
+            return []
+        wall_now = captured_at()
+        active: set[str] = set()
+        result: list[dict[str, Any]] = []
+        with self._lock:
+            for raw in clients:
+                if not isinstance(raw, dict):
+                    continue
+                session_id = str(raw.get("session_id") or "")
+                source_ip = str(raw.get("source_ip") or "")
+                if not session_id or not source_ip:
+                    continue
+                active.add(session_id)
+                counters = (int(raw.get("rx", 0) or 0), int(raw.get("tx", 0) or 0))
+                observed = self._lan_session_observations.get(session_id)
+                if observed is None:
+                    observed = {
+                        "source_ip": source_ip,
+                        "first_observed_at": wall_now,
+                        "last_activity_at": wall_now if any(counters) else None,
+                        "counters": counters,
+                    }
+                    self._lan_session_observations[session_id] = observed
+                    self.events.append(
+                        "lan",
+                        "info",
+                        "lan_client_connected",
+                        f"LAN Reticulum session observed from {source_ip}",
+                    )
+                elif observed["counters"] != counters:
+                    observed["counters"] = counters
+                    observed["last_activity_at"] = wall_now
+                result.append(
+                    dict(raw)
+                    | {
+                        "first_observed_at": observed["first_observed_at"],
+                        "last_activity_at": observed["last_activity_at"],
+                    }
+                )
+            for session_id in self._active_lan_sessions - active:
+                observed = self._lan_session_observations.pop(session_id, None)
+                if observed is not None:
+                    self.events.append(
+                        "lan",
+                        "info",
+                        "lan_client_disconnected",
+                        f"LAN Reticulum session from {observed['source_ip']} disconnected",
+                    )
+            self._active_lan_sessions = active
+        return sorted(result, key=lambda item: (item["source_ip"], item["source_port"]))
+
+    def _observe_lan_policy(self, policy: Any) -> None:
+        value = policy if isinstance(policy, dict) else {}
+        current = int(value.get("blocked_connections", 0) or 0)
+        with self._lock:
+            previous = self._previous_lan_blocked_connections
+            if previous is not None and current > previous:
+                delta = current - previous
+                alert = BridgeAlertV1(
+                    "warning",
+                    "lan_client_rejected",
+                    f"LAN address policy rejected {delta} connection(s) since the previous observation",
+                )
+                self._set_transient(alert)
+                self.events.append("lan", "warning", alert.code, alert.message)
+            self._previous_lan_blocked_connections = current
+
     def _observe_announces(self, telemetry: dict[str, Any]) -> None:
         observations = telemetry.get("recent_announces", [])
         if not isinstance(observations, list):
@@ -829,6 +909,24 @@ def _prometheus(status: dict[str, Any]) -> str:
     lines.append(f"rns_meshtastic_lora_queue_fragments {int(queue.get('fragments', 0) or 0)}")
     lines.append(f"rns_meshtastic_lora_queue_limit {int(queue.get('limit', 0) or 0)}")
     lines.append(f"rns_meshtastic_lan_clients {int(status.get('lan_client_count', 0) or 0)}")
+    lan_policy = status.get("lan_policy", {})
+    lines.append(
+        "rns_meshtastic_lan_connections_rejected_total "
+        f"{int(lan_policy.get('blocked_connections', 0) or 0)}"
+    )
+    lxmd = status.get("lxmd", {})
+    activity = lxmd.get("client_activity", {}) if isinstance(lxmd.get("client_activity"), dict) else {}
+    peering = lxmd.get("peering", {}) if isinstance(lxmd.get("peering"), dict) else {}
+    lines.append(
+        "rns_meshtastic_lxmd_client_messages_received_total "
+        f"{int(activity.get('messages_received', 0) or 0)}"
+    )
+    lines.append(
+        "rns_meshtastic_lxmd_client_messages_served_total "
+        f"{int(activity.get('messages_served', 0) or 0)}"
+    )
+    lines.append(f"rns_meshtastic_lxmd_peers {int(peering.get('total', 0) or 0)}")
+    lines.append(f"rns_meshtastic_lxmd_peers_active {int(peering.get('active', 0) or 0)}")
     return "\n".join(lines) + "\n"
 
 

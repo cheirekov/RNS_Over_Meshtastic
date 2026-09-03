@@ -44,10 +44,35 @@ Prometheus metrics изискват authentication. При loopback може д�
 
 Отворете `http://127.0.0.1:8787/`. UI показва отделно LoRa, LAN, public TCP,
 private IFAC TCP и LXMD propagation traffic, текущи скорости, общ radio queue pressure,
-Meshtastic peers, LAN client count, upstream status и LXMD propagation hash.
+Meshtastic peers, активни LAN TCP сесии, upstream status и LXMD propagation hash.
 Стойностите се форматират като B/KiB/MiB/GiB; tooltip, JSON API и Prometheus
 запазват точните bytes. Ако LXMD не предоставя peer counters, UI показва
 `not available`, а не подвеждащо `0 B`.
+
+### LAN clients и address policy
+
+Панелът **LAN clients** показва данните, които Reticulum действително има за
+всяка активна TCP сесия: наблюдаван source IP и ephemeral port, RX/TX bytes и
+скорост, announce/path-request frequency, първо наблюдение и последна
+активност. Това е socket metadata — IP адресът **не е** удостоверена Reticulum
+identity и няколко клиента могат да споделят един NAT/VPN адрес.
+
+Бутонът **Prepare deny rule** добавя точния IPv4 `/32` или IPv6 `/128` адрес в
+Advanced полето `RNS_LAN_DENYLIST`. Той не прекъсва връзката от браузъра:
+операторът преглежда промяната, избира Stage и изпълнява explicit CLI apply.
+Така Console не получава firewall, Docker или restart права. Поддържат се и
+ръчни CIDR правила:
+
+```dotenv
+# Empty means all source addresses not denied.
+RNS_LAN_ALLOWLIST=172.16.0.0/12,10.8.0.0/24
+# Deny wins over allow. A single-host rule is /32 or /128.
+RNS_LAN_DENYLIST=172.16.19.55/32
+```
+
+Policy listener-ът проверява адреса преди да създаде Reticulum client
+interface. Съществуващите IFAC настройки остават отделният криптографски
+контрол; IP/CIDR policy не ги замества.
 
 ## Read-only API и metrics
 
@@ -83,6 +108,12 @@ LXMD_MANUAL_ANNOUNCE_COOLDOWN_SECONDS=900
 Минимумът е 300 секунди. Cooldown state се пази в LXMD volume, така че restart
 не го заобикаля. Успешният отговор съдържа `announced_at` и
 `next_allowed_at`; прекалено ранна заявка връща HTTP 429 и не announce-ва.
+
+LXMD card показва cumulative client message operations (`uploaded` и
+`served`) и active/total propagation peers с наличните last-heard, distance и
+traffic counters. Официалният LXMD router не предоставя надежден брой уникални
+клиенти, затова Console изрично не представя тези message operations като
+„users“.
 
 ## Configuration schema и secrets
 

@@ -36,6 +36,9 @@ def test_renders_restricted_gateway_and_bounded_lxmd(tmp_path: Path) -> None:
     assert "interface_discovery_sources =" not in rns_config
     assert "interface_discovery_sources omitted" in rns_config
     assert "network_name = radio-private" in rns_config
+    assert "type = PolicyTCPServerInterface" in rns_config
+    assert "allow_networks =" in rns_config
+    assert "deny_networks =" in rns_config
     assert "autopeer = no" in lxmd_config
     assert "from_static_only = yes" in lxmd_config
     assert "message_storage_limit = 64" in lxmd_config
@@ -43,6 +46,19 @@ def test_renders_restricted_gateway_and_bounded_lxmd(tmp_path: Path) -> None:
     assert "propagation_sync_max_accepted_size = 64" in lxmd_config
     assert not (lxmd / "allowed").exists()
     assert (rns / "config").stat().st_mode & 0o777 == 0o600
+    assert (rns / "interfaces" / "PolicyTCPServerInterface.py").exists()
+
+
+def test_lan_address_policy_is_canonicalised_and_rendered(tmp_path: Path) -> None:
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    values = environment() | {
+        "RNS_LAN_ALLOWLIST": "10.8.0.4,2001:db8::/32",
+        "RNS_LAN_DENYLIST": "10.8.0.9/32",
+    }
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    assert "allow_networks = 10.8.0.4/32, 2001:db8::/32" in config
+    assert "deny_networks = 10.8.0.9/32" in config
 
 
 def test_requires_allowlist_for_unicast_hub() -> None:

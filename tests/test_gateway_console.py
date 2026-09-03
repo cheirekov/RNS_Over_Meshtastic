@@ -18,6 +18,20 @@ def test_console_status_separates_lora_lan_public_and_lxmd(monkeypatch, tmp_path
         "private_tcp": {"rx": 30, "tx": 40, "rxs": 3, "txs": 4},
         "public": {"rx": 50, "tx": 60, "rxs": 5, "txs": 6},
         "public_interfaces": {"Public boundary 1": {"up": True}},
+        "private_tcp_client_count": 1,
+        "lan_clients": [
+            {
+                "session_id": "session-a",
+                "source_ip": "192.0.2.44",
+                "source_port": 54321,
+                "up": True,
+                "rx": 30,
+                "tx": 40,
+                "rxs": 3,
+                "txs": 4,
+            }
+        ],
+        "lan_policy": {"blocked_connections": 2, "deny_networks": ["192.0.2.9/32"]},
     }
     telemetry = {
         "schema": 1,
@@ -44,6 +58,8 @@ def test_console_status_separates_lora_lan_public_and_lxmd(monkeypatch, tmp_path
                 "available": True,
                 "source": "lxmd.compile_stats.peer_bytes",
             },
+            "client_activity": {"messages_received": 7, "messages_served": 11},
+            "peering": {"total": 2, "active": 1, "peers": []},
         },
     )
 
@@ -56,7 +72,13 @@ def test_console_status_separates_lora_lan_public_and_lxmd(monkeypatch, tmp_path
     assert status["public_interfaces"]["Public boundary 1"]["reconnects"] == 0
     assert status["traffic"]["propagation"]["rx_bytes"] == 70
     assert status["traffic"]["propagation"]["available"] is True
+    assert status["lan_clients"][0]["source_ip"] == "192.0.2.44"
+    assert status["lan_clients"][0]["first_observed_at"]
+    assert status["lan_policy"]["blocked_connections"] == 2
     assert 'network="lora",direction="tx"} 20' in _prometheus(status)
+    assert "rns_meshtastic_lan_connections_rejected_total 2" in _prometheus(status)
+    assert "rns_meshtastic_lxmd_client_messages_received_total 7" in _prometheus(status)
+    assert "rns_meshtastic_lxmd_peers_active 1" in _prometheus(status)
 
 
 def test_console_configuration_view_redacts_secrets(monkeypatch, tmp_path: Path):

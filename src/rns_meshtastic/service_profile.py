@@ -16,6 +16,7 @@ HOSTNAME = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
 )
 MAX_PUBLIC_UPSTREAMS = 8
+MAX_LAN_NETWORKS = 64
 
 
 def _value(environment: Mapping[str, str], name: str, default: str | None = None) -> str:
@@ -119,6 +120,22 @@ def _endpoint_list(environment: Mapping[str, str], variable: str) -> list[tuple[
     if len(set(endpoints)) != len(endpoints):
         raise ValueError(f"{variable} cannot contain duplicate endpoints")
     return endpoints
+
+
+def _network_list(environment: Mapping[str, str], variable: str) -> list[str]:
+    raw = environment.get(variable, "").strip()
+    if not raw:
+        return []
+    entries = [entry.strip() for entry in raw.split(",") if entry.strip()]
+    if len(entries) > MAX_LAN_NETWORKS:
+        raise ValueError(f"{variable} supports at most {MAX_LAN_NETWORKS} networks")
+    try:
+        networks = [str(ipaddress.ip_network(entry, strict=False)) for entry in entries]
+    except ValueError as error:
+        raise ValueError(f"{variable} must contain IPv4/IPv6 addresses or CIDR networks") from error
+    if len(set(networks)) != len(networks):
+        raise ValueError(f"{variable} cannot contain duplicate networks")
+    return networks
 
 
 def _format_endpoint(endpoint: tuple[str, int]) -> str:
@@ -321,6 +338,8 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
     lan_interface_mode = (
         "gateway" if lan_public_visibility == "yes" else private_interface_mode
     )
+    lan_allowlist = _network_list(environment, "RNS_LAN_ALLOWLIST")
+    lan_denylist = _network_list(environment, "RNS_LAN_DENYLIST")
 
     radio_name, radio_passphrase, radio_ifac = _ifac_configuration(
         environment, "RNS_RADIO_IFAC", "radio"
@@ -391,6 +410,8 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
         "RNS_TCP_LISTEN_PORT": str(
             _integer(environment, "RNS_TCP_LISTEN_PORT", 4242, 1, 65535)
         ),
+        "RNS_LAN_ALLOWLIST": ", ".join(lan_allowlist),
+        "RNS_LAN_DENYLIST": ", ".join(lan_denylist),
         "RNS_LOGLEVEL": str(_integer(environment, "RNS_LOGLEVEL", 4, 0, 7)),
         "LXMD_NODE_NAME": _value(environment, "LXMD_NODE_NAME", "RNS Meshtastic Propagation"),
         "LXMD_ANNOUNCE_INTERVAL": str(
@@ -433,10 +454,18 @@ def render_service_profile(
     values = configuration_values(environment)
     rns_template = Template((template_directory / "rns.conf.template").read_text(encoding="utf-8"))
     lxmd_template = Template((template_directory / "lxmd.conf.template").read_text(encoding="utf-8"))
-    interface_stub = (template_directory / "RNSMeshtasticInterface.py").read_text(encoding="utf-8")
+    interface_stubs = (
+        "RNSMeshtasticInterface.py",
+        "PolicyTCPServerInterface.py",
+    )
 
     _atomic_write(rns_directory / "config", rns_template.substitute(values), 0o600)
-    _atomic_write(rns_directory / "interfaces" / "RNSMeshtasticInterface.py", interface_stub, 0o644)
+    for filename in interface_stubs:
+        _atomic_write(
+            rns_directory / "interfaces" / filename,
+            (template_directory / filename).read_text(encoding="utf-8"),
+            0o644,
+        )
     _atomic_write(lxmd_directory / "config", lxmd_template.substitute(values), 0o600)
     allowed = values["LXMD_ALLOWED_IDENTITIES"]
     if allowed:

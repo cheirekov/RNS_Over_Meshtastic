@@ -59,10 +59,17 @@ def status() -> dict:
             },
             {
                 "type": "TCPClientInterface",
+                "name": "TCPInterface[Client on LAN VPN Reticulum clients/192.0.2.10:54321]",
                 "short_name": "Client on LAN VPN Reticulum clients",
                 "parent_interface_name": "TCPServerInterface[LAN VPN Reticulum clients/0.0.0.0:4242]",
+                "hash": "lan-session-1",
+                "status": True,
                 "rxb": 250,
                 "txb": 350,
+                "rxs": 8,
+                "txs": 9,
+                "incoming_announce_frequency": 0.25,
+                "incoming_pr_frequency": 0.5,
             },
         ],
     }
@@ -76,6 +83,21 @@ def test_summary_does_not_double_count_dynamic_radio_tx_or_tcp_children() -> Non
     assert summary["private_upstream"] == {"rx": 25, "tx": 15, "rxs": 1.0, "txs": 2.0}
     assert summary["radio_parent_count"] == 1
     assert summary["radio_peer_count"] == 1
+    assert summary["private_tcp_client_count"] == 1
+    assert summary["lan_clients"] == [
+        {
+            "session_id": "lan-session-1",
+            "source_ip": "192.0.2.10",
+            "source_port": 54321,
+            "up": True,
+            "rx": 250,
+            "tx": 350,
+            "rxs": 8.0,
+            "txs": 9.0,
+            "incoming_announce_frequency": 0.25,
+            "incoming_path_request_frequency": 0.5,
+        }
+    ]
 
 
 def test_snapshot_round_trip_is_private(tmp_path: Path) -> None:

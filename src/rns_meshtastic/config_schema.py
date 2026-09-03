@@ -351,6 +351,22 @@ FIELDS = (
         maximum=65535,
     ),
     _field(
+        "RNS_LAN_ALLOWLIST",
+        "lan",
+        "Optional IPv4/IPv6 address or CIDR allowlist. Empty permits every source not denied. "
+        "The observed socket IP is not a Reticulum identity.",
+        kind="network-list",
+        advanced=True,
+    ),
+    _field(
+        "RNS_LAN_DENYLIST",
+        "lan",
+        "IPv4/IPv6 addresses or CIDR networks rejected before a Reticulum client interface is created. "
+        "Deny rules override allow rules and require Stage then CLI apply.",
+        kind="network-list",
+        advanced=True,
+    ),
+    _field(
         "RNS_LOGLEVEL",
         "lan",
         "Reticulum log level from 0 to 7.",
