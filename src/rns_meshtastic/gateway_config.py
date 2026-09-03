@@ -33,7 +33,7 @@ POLICY_PROFILES = {
         "RNS_REPAIR_BUDGET_WINDOW": "60",
     },
 }
-DISCOVERY_MODES = {"off", "manual", "trusted_auto"}
+DISCOVERY_MODES = {"off", "manual", "auto", "trusted_auto"}
 SAFE_NAME = re.compile(r"[A-Z][A-Z0-9_]*\Z")
 MANAGED_FIELDS = (
     "MESHTASTIC_TCP_HOST",
@@ -159,7 +159,7 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
 
     discovery = values.get("RNS_PUBLIC_DISCOVERY", "off").lower()
     if discovery not in DISCOVERY_MODES:
-        raise ValueError("RNS_PUBLIC_DISCOVERY must be off, manual or trusted_auto")
+        raise ValueError("RNS_PUBLIC_DISCOVERY must be off, manual, auto or trusted_auto")
     sources = [
         item.strip().lower() for item in values.get("RNS_DISCOVERY_SOURCES", "").split(",") if item.strip()
     ]
@@ -167,6 +167,10 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
         raise ValueError("RNS_DISCOVERY_SOURCES must contain 32-character identity hashes")
     if discovery == "trusted_auto" and not sources:
         raise ValueError("trusted_auto discovery requires RNS_DISCOVERY_SOURCES")
+    if discovery == "auto" and sources:
+        raise ValueError(
+            "auto discovery uses all valid sources; clear RNS_DISCOVERY_SOURCES or use trusted_auto"
+        )
     values["RNS_PUBLIC_DISCOVERY"] = discovery
     values["RNS_DISCOVERY_SOURCES"] = ",".join(sources)
 
@@ -238,6 +242,11 @@ def validate_gateway_environment(environment: Mapping[str, str]) -> ValidationRe
         warnings.append("custom LoRa policy bypasses conservative queue and pacing defaults")
     if discovery == "manual" and not sources:
         warnings.append("manual discovery accepts candidates from every connected Reticulum network")
+    if discovery == "auto":
+        warnings.append(
+            "auto discovery can connect up to RNS_DISCOVERY_MAX valid public boundaries; "
+            "they remain boundary-only and cannot export public traffic to LoRa"
+        )
     if values.get("RNS_LAN_PUBLIC_VISIBILITY", "no").lower() == "yes":
         warnings.append("boundary announces are visible to trusted LAN/VPN clients")
     if values.get("RNS_PRIVATE_UPSTREAMS", ""):

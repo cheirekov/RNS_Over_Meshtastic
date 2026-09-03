@@ -155,8 +155,8 @@ def _upstream_configuration(
         raise ValueError("RNS_PUBLIC_BOOTSTRAP_UPSTREAMS must be a subset of RNS_PUBLIC_UPSTREAMS")
     if not private_bootstrap.issubset(set(private)):
         raise ValueError("RNS_PRIVATE_BOOTSTRAP_UPSTREAMS must be a subset of RNS_PRIVATE_UPSTREAMS")
-    if (public_bootstrap or private_bootstrap) and discovery != "trusted_auto":
-        raise ValueError("bootstrap-only upstreams require RNS_PUBLIC_DISCOVERY=trusted_auto")
+    if (public_bootstrap or private_bootstrap) and discovery not in {"auto", "trusted_auto"}:
+        raise ValueError("bootstrap-only upstreams require RNS_PUBLIC_DISCOVERY=auto or trusted_auto")
     overlap = set(public).intersection(private)
     if overlap:
         endpoint = _format_endpoint(sorted(overlap)[0])
@@ -286,8 +286,8 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
     )
 
     discovery = _value(environment, "RNS_PUBLIC_DISCOVERY", "off").lower()
-    if discovery not in {"off", "manual", "trusted_auto"}:
-        raise ValueError("RNS_PUBLIC_DISCOVERY must be off, manual or trusted_auto")
+    if discovery not in {"off", "manual", "auto", "trusted_auto"}:
+        raise ValueError("RNS_PUBLIC_DISCOVERY must be off, manual, auto or trusted_auto")
     discovery_sources = [
         item.strip().lower()
         for item in environment.get("RNS_DISCOVERY_SOURCES", "").split(",")
@@ -297,6 +297,10 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
         raise ValueError("RNS_DISCOVERY_SOURCES must contain 32-character identity hashes")
     if discovery == "trusted_auto" and not discovery_sources:
         raise ValueError("trusted_auto discovery requires RNS_DISCOVERY_SOURCES")
+    if discovery == "auto" and discovery_sources:
+        raise ValueError(
+            "auto discovery uses all valid sources; clear RNS_DISCOVERY_SOURCES or use trusted_auto"
+        )
     discovery_max = _integer(environment, "RNS_DISCOVERY_MAX", 1, 1, 8)
     discovery_required_value = _integer(
         environment, "RNS_DISCOVERY_REQUIRED_VALUE", 14, 1, 255
@@ -305,7 +309,7 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
     respond_to_probes = _yes_no(environment, "RNS_RESPOND_TO_PROBES", "no")
     autoconnect_policy = (
         "  # autoconnect policy inactive"
-        if discovery != "trusted_auto"
+        if discovery not in {"auto", "trusted_auto"}
         else (
             f"  autoconnect_discovered_interfaces = {discovery_max}\n"
             "  autoconnect_interface_mode = boundary\n"
@@ -318,6 +322,10 @@ def configuration_values(environment: Mapping[str, str]) -> dict[str, str]:
         if discovery_sources
         else "  # interface_discovery_sources omitted: no identity allowlist configured"
     )
+    if discovery == "auto":
+        discovery_sources_line = (
+            "  # interface_discovery_sources omitted: auto accepts all valid discovery sources"
+        )
     discovery_block = (
         f"  discover_interfaces = {'No' if discovery == 'off' else 'Yes'}\n"
         f"{discovery_sources_line}\n"

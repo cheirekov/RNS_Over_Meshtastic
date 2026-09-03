@@ -216,11 +216,11 @@ FIELDS = (
         "RNS_PUBLIC_BOOTSTRAP_UPSTREAMS",
         "public",
         "Tick configured public boundary endpoints that are only temporary bootstrap seeds. "
-        "Reticulum closes them after the trusted auto-connect target is reached and restores "
+        "Reticulum closes them after the auto-connect target is reached and restores "
         "them when no discovered boundary remains.",
         kind="endpoint-list",
-        required="RNS_PUBLIC_DISCOVERY=trusted_auto",
-        applies_when=(("RNS_PUBLIC_DISCOVERY", ("trusted_auto",)),),
+        required="RNS_PUBLIC_DISCOVERY=auto or trusted_auto",
+        applies_when=(("RNS_PUBLIC_DISCOVERY", ("auto", "trusted_auto")),),
     ),
     _field(
         "RNS_PRIVATE_UPSTREAMS",
@@ -231,11 +231,11 @@ FIELDS = (
     _field(
         "RNS_PRIVATE_BOOTSTRAP_UPSTREAMS",
         "public",
-        "Tick configured private IFAC boundary endpoints that are only temporary trusted-discovery "
+        "Tick configured private IFAC boundary endpoints that are only temporary auto-discovery "
         "bootstrap seeds. They use the shared private-upstream IFAC profile.",
         kind="endpoint-list",
-        required="RNS_PUBLIC_DISCOVERY=trusted_auto",
-        applies_when=(("RNS_PUBLIC_DISCOVERY", ("trusted_auto",)),),
+        required="RNS_PUBLIC_DISCOVERY=auto or trusted_auto",
+        applies_when=(("RNS_PUBLIC_DISCOVERY", ("auto", "trusted_auto")),),
     ),
     _field(
         "RNS_PRIVATE_UPSTREAM_IFAC_NAME",
@@ -263,10 +263,11 @@ FIELDS = (
     _field(
         "RNS_PUBLIC_DISCOVERY",
         "discovery",
-        "off disables the catalogue; manual observes candidates but never connects; trusted_auto "
-        "connects only candidates announced by explicitly trusted source identities.",
+        "off disables discovery; manual observes candidates but never connects; auto mirrors "
+        "Columba and connects valid discovered boundaries up to the limit; trusted_auto restricts "
+        "auto-connect to explicitly trusted source identities.",
         default="off",
-        choices=("off", "manual", "trusted_auto"),
+        choices=("off", "manual", "auto", "trusted_auto"),
     ),
     _field(
         "RNS_DISCOVERY_SOURCES",
@@ -278,13 +279,13 @@ FIELDS = (
     _field(
         "RNS_DISCOVERY_MAX",
         "discovery",
-        "Maximum concurrently trusted auto-connected boundary interfaces. This is a capacity limit, "
+        "Maximum concurrently auto-connected boundary interfaces. This is a capacity limit, "
         "not a latency or proximity benchmark.",
         default="1",
         kind="integer",
         minimum=1,
         maximum=8,
-        applies_when=(("RNS_PUBLIC_DISCOVERY", ("trusted_auto",)),),
+        applies_when=(("RNS_PUBLIC_DISCOVERY", ("auto", "trusted_auto")),),
     ),
     _field(
         "RNS_DISCOVERY_REQUIRED_VALUE",
@@ -295,18 +296,18 @@ FIELDS = (
         minimum=1,
         maximum=255,
         advanced=True,
-        applies_when=(("RNS_PUBLIC_DISCOVERY", ("manual", "trusted_auto")),),
+        applies_when=(("RNS_PUBLIC_DISCOVERY", ("manual", "auto", "trusted_auto")),),
     ),
     _field(
         "RNS_DISCOVERY_GRAVITY",
         "discovery",
-        "Reticulum gravity assigned to trusted auto-connected interfaces; lower values are preferred.",
+        "Reticulum gravity assigned to auto-connected interfaces; lower values are preferred.",
         default="0",
         kind="integer",
         minimum=-100,
         maximum=100,
         advanced=True,
-        applies_when=(("RNS_PUBLIC_DISCOVERY", ("trusted_auto",)),),
+        applies_when=(("RNS_PUBLIC_DISCOVERY", ("auto", "trusted_auto")),),
     ),
     _field(
         "RNS_RESPOND_TO_PROBES",

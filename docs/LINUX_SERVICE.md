@@ -172,18 +172,18 @@ This authenticates the private backbone but does not make it an unrestricted
 Reticulum gateway. Its IFAC pair must differ from the radio and LAN IFAC pairs.
 Console and `traffic-report` account private-boundary traffic separately.
 
-With `RNS_PUBLIC_DISCOVERY=trusted_auto`, explicit endpoints can be temporary
-bootstrap connections. Each bootstrap list must be an exact subset of its
-normal upstream list:
+With `RNS_PUBLIC_DISCOVERY=auto` or `trusted_auto`, explicit endpoints can be
+temporary bootstrap connections. Each bootstrap list must be an exact subset
+of its normal upstream list:
 
 ```dotenv
 RNS_PUBLIC_BOOTSTRAP_UPSTREAMS=seed.example:4242
 RNS_PRIVATE_BOOTSTRAP_UPSTREAMS=private-seed.example:4242
 ```
 
-Reticulum closes bootstrap-only interfaces after a trusted discovered
-interface is connected. Bootstrap settings are rejected in `off` or `manual`
-discovery modes.
+Reticulum closes bootstrap-only interfaces after a discovered interface is
+connected. Bootstrap settings are rejected in `off` or `manual` discovery
+modes.
 
 ## Start and inspect
 

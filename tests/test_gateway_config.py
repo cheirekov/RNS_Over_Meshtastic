@@ -109,6 +109,24 @@ def test_trusted_discovery_requires_allowlisted_identity():
     assert result.values["RNS_DISCOVERY_SOURCES"] == "0123456789abcdef0123456789abcdef"
 
 
+def test_columba_like_auto_discovery_requires_no_source_allowlist():
+    result = validate_gateway_environment(
+        environment() | {"RNS_PUBLIC_DISCOVERY": "auto", "RNS_DISCOVERY_MAX": "5"}
+    )
+    assert result.values["RNS_PUBLIC_DISCOVERY"] == "auto"
+    assert result.values["RNS_DISCOVERY_SOURCES"] == ""
+    assert any("valid public boundaries" in warning for warning in result.warnings)
+
+    with pytest.raises(ValueError, match="clear RNS_DISCOVERY_SOURCES"):
+        validate_gateway_environment(
+            environment()
+            | {
+                "RNS_PUBLIC_DISCOVERY": "auto",
+                "RNS_DISCOVERY_SOURCES": "0123456789abcdef0123456789abcdef",
+            }
+        )
+
+
 def test_duty_cycle_override_is_always_rejected():
     with pytest.raises(ValueError, match="duty-cycle override"):
         validate_gateway_environment(environment() | {"MESHTASTIC_OVERRIDE_DUTY_CYCLE": "yes"})

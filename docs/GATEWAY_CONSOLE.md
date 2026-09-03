@@ -223,13 +223,14 @@ docker compose --env-file .env.linux-service -f compose.linux.yaml \
 
 - `off` — default; няма discovery.
 - `manual` — Console показва специалните interface-discovery кандидати, но **никога** не ги свързва автоматично. Бутонът `Prepare as explicit boundary` само добавя endpoint-а във staged form; последващият CLI apply остава задължителен.
+- `auto` — Columba-подобен режим: приема valid interface-discovery records от всички източници и auto-connect-ва до `RNS_DISCOVERY_MAX` boundary интерфейса. Те никога не export-ват public traffic към LoRa.
 - `trusted_auto` — autoconnect само от identity hashes в
   `RNS_DISCOVERY_SOURCES`; връзките са `boundary` и не announce-ват към LoRa.
 
 `RNS_DISCOVERY_REQUIRED_VALUE` управлява минималната discovery stamp стойност,
 а `RNS_DISCOVERY_GRAVITY` — предпочитанието на auto-connected интерфейсите.
 Explicit public/private upstream може да бъде отбелязан като bootstrap чрез
-съответния `*_BOOTSTRAP_UPSTREAMS` subset. Bootstrap е разрешен само при
+съответния `*_BOOTSTRAP_UPSTREAMS` subset. Bootstrap е разрешен при `auto` и
 `trusted_auto`: Reticulum го затваря, когато достигне configured auto-connect
 лимита, и го връща ако няма нито един active discovered boundary. Следователно
 bootstrap е seed/failover, а не speed-test или постоянен втори upstream.
@@ -247,18 +248,19 @@ key/passphrase. Latency, uptime, reconnects и route changes трябва да �
    `RNS_PUBLIC_DISCOVERY=manual`. Това събира каталог, но не прави никакъв
    automatic connection. Празен каталог е нормален, ако upstream-ът не
    публикува interface-discovery records.
-2. Провери `Source` identity на намерения кандидат извън самата discovery
-   мрежа (оператор/публикувана инфраструктурна документация). Hostname или
-   Reticulum destination hash не са заместител на тази identity.
-3. Едва след това избери `trusted_auto`, въведи identity в
-   `RNS_DISCOVERY_SOURCES`, настрой разумен `RNS_DISCOVERY_MAX` (default `1`)
-   и маркирай проверения статичен endpoint като bootstrap seed. Validate →
-   Stage → explicit CLI apply.
+2. За Columba-подобно поведение избери `auto`, остави
+   `RNS_DISCOVERY_SOURCES` празно и настрой разумен `RNS_DISCOVERY_MAX`
+   (default `1`). Reticulum избира valid discovered transport interfaces до
+   този лимит. Те остават `boundary`, а public traffic не се изнася по LoRa.
+3. Ако познаваш и искаш да ограничиш source identities, избери вместо това
+   `trusted_auto`, въведи identity в `RNS_DISCOVERY_SOURCES` и по желание
+   маркирай статичния endpoint като bootstrap seed. Validate → Stage →
+   explicit CLI apply.
 
-При `trusted_auto` Console показва колко discovered boundary интерфейса са
-active и кои static endpoints са temporary bootstrap или persistent. Тя не
-твърди, че кандидатът е „най-бърз“ или „най-близък“: Reticulum discovery не е
-latency benchmark.
+При `auto` и `trusted_auto` Console показва колко discovered boundary
+интерфейса са active и кои static endpoints са temporary bootstrap или
+persistent. Тя не твърди, че кандидатът е „най-бърз“ или „най-близък“:
+Reticulum discovery не е latency benchmark.
 
 ## Announce visibility
 

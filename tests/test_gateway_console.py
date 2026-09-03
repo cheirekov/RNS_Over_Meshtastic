@@ -134,6 +134,18 @@ def test_discovery_status_exposes_safe_catalogue_and_bootstrap_state(monkeypatch
     assert "ifac_netkey" not in candidate
 
 
+def test_auto_discovery_status_has_no_identity_allowlist(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("RNS_PUBLIC_DISCOVERY", "auto")
+    monkeypatch.setenv("RNS_DISCOVERY_MAX", "5")
+    monkeypatch.delenv("RNS_DISCOVERY_SOURCES", raising=False)
+    monkeypatch.setattr("rns_meshtastic.gateway_console.collect_discovery", lambda _: [])
+    state = GatewayState(tmp_path, tmp_path / "lxmd", tmp_path / "stages")
+    discovery = state._discovery_status({"autoconnected_interfaces": []})
+    assert discovery["mode"] == "auto"
+    assert discovery["trusted_sources"] == []
+    assert discovery["autoconnect"] == {"enabled": True, "maximum": 5, "active": [], "gravity": 0}
+
+
 def test_discovery_status_reports_collector_failure_instead_of_empty_catalogue(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("RNS_PUBLIC_DISCOVERY", "manual")
 

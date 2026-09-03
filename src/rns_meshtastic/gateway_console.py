@@ -532,12 +532,12 @@ class GatewayState:
         }
         return {
             "schema": 1,
-            "mode": mode if mode in {"off", "manual", "trusted_auto"} else "invalid",
+            "mode": mode if mode in {"off", "manual", "auto", "trusted_auto"} else "invalid",
             "enabled": mode != "off",
             "collector": collector,
             "trusted_sources": sources,
             "autoconnect": {
-                "enabled": mode == "trusted_auto",
+                "enabled": mode in {"auto", "trusted_auto"},
                 "maximum": int(environment.get("RNS_DISCOVERY_MAX", "1") or 1),
                 "active": [item for item in autoconnected if isinstance(item, dict)],
                 "gravity": int(environment.get("RNS_DISCOVERY_GRAVITY", "0") or 0),

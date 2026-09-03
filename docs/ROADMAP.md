@@ -1,4 +1,11 @@
-# Roadmap след 0.5.0
+# Roadmap след 0.5.1
+
+## Завършено в Linux Console 0.5.1
+
+- Columba-подобен bounded open discovery режим `auto`: до осем valid
+  discovered boundary интерфейса, без предварителен identity allowlist.
+- Запазен отделен `trusted_auto` режим за deployments с explicit trusted
+  discovery source identities.
 
 ## Завършено в Linux Console 0.5.0
 
@@ -6,7 +13,7 @@
   endpoint-ът остава минимален и без secrets.
 - Structured Add/Remove public и private upstream-и, отделен private IFAC и
   отделни counters/status за private boundaries.
-- Public/private bootstrap subsets за allowlisted `trusted_auto` discovery,
+- Public/private bootstrap subsets за `auto` и allowlisted `trusted_auto` discovery,
   configurable stamp value, gravity и opt-in probe response.
 - Header-only LoRa announce observability и ясно състояние преди да бъде научен
   първият dynamic Meshtastic peer; IFAC ciphertext остава изрично opaque.
@@ -39,8 +46,9 @@ Transport framing, `auto_multi_peer`, scheduler и repair алгоритмите
   upstream status, LXMD hash/store status, copy и QR.
 - Safe env validator, `conservative/balanced/custom` policy, numbered staging,
   explicit host apply, backup, health check и rollback.
-- `off/manual/trusted_auto` discovery policy; trusted autoconnect е allowlisted
-  и винаги `boundary`.
+- `off/manual/auto/trusted_auto` discovery policy; `auto` follows Columba's
+  bounded open auto-connect behaviour, while `trusted_auto` is allowlisted;
+  both are always `boundary`.
 - Public upstream safety invariant: radio е `internal`; public announces не се
   export-ват автоматично към LoRa.
 - Android 0.3.0 read-only API на `127.0.0.1:7823`, видима версия, copy/import
@@ -79,7 +87,12 @@ failure mode.
 
 ### 0.5 — ecosystem integration
 
-- Columba upstream proposal.
+- Pinned `reticulum-android` shared-instance build и GPL Meshtastic TCP proof;
+  Columba е първият LXMF acceptance client без transport fork.
+- Maintainer/rightsholder решение за GPL combined daemon, dual licensing или
+  независимо port 76 изпълнение преди upstream proposal.
+- Columba direct-interface proposal само ако shared-daemon моделът остави
+  документиран functional gap.
 - CrossTalk preset/status adapter.
 - RatSpeak и Sideband companion documentation/proposals.
 - Machine-readable contract fixtures за external clients.

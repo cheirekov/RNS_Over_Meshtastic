@@ -134,7 +134,7 @@ def test_private_upstream_without_ifac_is_rejected() -> None:
         configuration_values(environment() | {"RNS_PRIVATE_UPSTREAMS": "private.example:4242"})
 
 
-def test_bootstrap_upstream_must_be_subset_and_use_trusted_discovery(tmp_path: Path) -> None:
+def test_bootstrap_upstream_must_be_subset_and_use_auto_discovery(tmp_path: Path) -> None:
     values = environment() | {
         "RNS_PUBLIC_UPSTREAMS": "seed.example:4242,other.example:4242",
         "RNS_PUBLIC_BOOTSTRAP_UPSTREAMS": "seed.example:4242",
@@ -148,10 +148,17 @@ def test_bootstrap_upstream_must_be_subset_and_use_trusted_discovery(tmp_path: P
     assert "bootstrap_only = Yes" in seed
     assert "bootstrap_only = No" in other
 
-    with pytest.raises(ValueError, match="trusted_auto"):
+    with pytest.raises(ValueError, match="auto or trusted_auto"):
         configuration_values(values | {"RNS_PUBLIC_DISCOVERY": "off"})
     with pytest.raises(ValueError, match="subset"):
         configuration_values(values | {"RNS_PUBLIC_BOOTSTRAP_UPSTREAMS": "missing.example:4242"})
+
+    open_auto = environment() | {
+        "RNS_PUBLIC_UPSTREAMS": "seed.example:4242",
+        "RNS_PUBLIC_BOOTSTRAP_UPSTREAMS": "seed.example:4242",
+        "RNS_PUBLIC_DISCOVERY": "auto",
+    }
+    assert "bootstrap_only = Yes" in configuration_values(open_auto)["RNS_BOUNDARY_UPSTREAM_BLOCK"]
 
 
 def test_discovery_tuning_and_probe_response_are_rendered(tmp_path: Path) -> None:
@@ -201,6 +208,22 @@ def test_trusted_discovery_is_boundary_only_and_keeps_radio_internal(tmp_path: P
     assert "discover_interfaces = Yes" in config
     assert "interface_discovery_sources = 0123456789abcdef0123456789abcdef" in config
     assert "autoconnect_discovered_interfaces = 2" in config
+    assert "autoconnect_interface_mode = boundary" in config
+    assert "autoconnect_announces_to_internal = No" in config
+    assert "mode = internal" in radio
+    assert "mode = internal" in lan
+
+
+def test_auto_discovery_matches_columba_style_open_autoconnect(tmp_path: Path) -> None:
+    templates = Path(__file__).parents[1] / "docker" / "linux-service" / "templates"
+    values = environment() | {"RNS_PUBLIC_DISCOVERY": "auto", "RNS_DISCOVERY_MAX": "5"}
+    render_service_profile(templates, tmp_path / "rns", tmp_path / "lxmd", values)
+    config = (tmp_path / "rns" / "config").read_text()
+    radio, lan = config.split("  [[LAN VPN Reticulum clients]]", maxsplit=1)
+    assert "discover_interfaces = Yes" in config
+    assert "interface_discovery_sources =" not in config
+    assert "auto accepts all valid discovery sources" in config
+    assert "autoconnect_discovered_interfaces = 5" in config
     assert "autoconnect_interface_mode = boundary" in config
     assert "autoconnect_announces_to_internal = No" in config
     assert "mode = internal" in radio
