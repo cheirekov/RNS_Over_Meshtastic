@@ -113,6 +113,12 @@ def _telemetry_stale_seconds(telemetry: dict[str, Any]) -> float:
 
 
 def collect_discovery(config_dir: Path) -> list[dict[str, Any]]:
+    """Read Reticulum's persisted interface-discovery catalogue.
+
+    A silent empty list makes a disabled/broken shared-instance query
+    indistinguishable from an honestly empty catalogue. Callers that need the
+    distinction should catch the raised RuntimeError and expose it as status.
+    """
     result = subprocess.run(
         ["rnstatus", "--config", str(config_dir), "--discovered", "--json"],
         check=False,
@@ -121,7 +127,8 @@ def collect_discovery(config_dir: Path) -> list[dict[str, Any]]:
         timeout=20,
     )
     if result.returncode != 0:
-        return []
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise RuntimeError(f"rnstatus discovery query failed: {detail}")
     for line in reversed(result.stdout.splitlines()):
         try:
             value = json.loads(line)
@@ -133,7 +140,7 @@ def collect_discovery(config_dir: Path) -> list[dict[str, Any]]:
             candidates = value.get("discovered_interfaces") or value.get("interfaces")
             if isinstance(candidates, list):
                 return [item for item in candidates if isinstance(item, dict)]
-    return []
+    raise RuntimeError("rnstatus discovery query did not return a JSON catalogue")
 
 
 def collect_routes(config_dir: Path) -> list[dict[str, Any]]:
@@ -258,6 +265,17 @@ class GatewayState:
             alerts.append(BridgeAlertV1("error", "status_collector_failed", collector_error))
 
         telemetry = _load_json(self.config_dir / "meshtastic-telemetry.json")
+        discovery = self._discovery_status(traffic)
+        if discovery["mode"] != "off" and not discovery["collector"]["available"]:
+            alerts.append(
+                BridgeAlertV1(
+                    "warning",
+                    "discovery_collector_failed",
+                    "RNS discovery catalogue is unavailable: "
+                    + str(discovery["collector"].get("error") or "unknown error"),
+                )
+            )
+
         try:
             lxmd = self.lxmd()
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
@@ -423,7 +441,10 @@ class GatewayState:
             "public_interfaces": enhanced_upstreams,
             "private_interfaces": enhanced_private_upstreams,
             "lxmd": lxmd,
-            "discovery": self._safe_discovery(),
+            # Keep the original list for the early Console API consumers, but
+            # provide a versioned, diagnostic-rich object for the UI/API.
+            "discovery": discovery["candidates"],
+            "discovery_status": discovery,
             "routes": routes,
             "recent_announces": recent_announces[-64:],
             "announce_observability": telemetry.get(
@@ -431,6 +452,89 @@ class GatewayState:
                 {"header_visibility": "unavailable", "payloads_recorded": False},
             ),
             "radio_peer_ready": bool(peers_list),
+        }
+
+    @staticmethod
+    def _endpoint_values(value: str) -> list[str]:
+        return [entry.strip() for entry in value.split(",") if entry.strip()]
+
+    @staticmethod
+    def _safe_discovery_candidate(raw: dict[str, Any]) -> dict[str, Any]:
+        """Return operational metadata only; never expose discovery IFAC data."""
+        supported = str(raw.get("type") or "") in {"BackboneInterface", "TCPServerInterface"}
+        endpoint = None
+        if supported and raw.get("reachable_on") and raw.get("port"):
+            endpoint = f"{raw['reachable_on']}:{raw['port']}"
+        return {
+            "name": str(raw.get("name") or "discovered interface"),
+            "type": str(raw.get("type") or "unknown"),
+            "status": str(raw.get("status") or "unknown"),
+            "transport": bool(raw.get("transport")),
+            "network_id": str(raw.get("network_id") or ""),
+            "transport_id": str(raw.get("transport_id") or ""),
+            "endpoint": endpoint,
+            "reachable_on": str(raw.get("reachable_on") or "") or None,
+            "port": int(raw["port"]) if isinstance(raw.get("port"), int) else None,
+            "hops": int(raw.get("hops", 0) or 0),
+            "value": int(raw.get("value", 0) or 0),
+            "discovered_at": raw.get("discovered") or raw.get("received"),
+            "last_heard_at": raw.get("last_heard"),
+            "autoconnect_supported": supported,
+        }
+
+    def _discovery_status(self, traffic: dict[str, Any]) -> dict[str, Any]:
+        environment = self._active_environment_raw()
+        mode = (environment.get("RNS_PUBLIC_DISCOVERY", "off") or "off").lower()
+        sources = self._endpoint_values(environment.get("RNS_DISCOVERY_SOURCES", ""))
+        public = self._endpoint_values(environment.get("RNS_PUBLIC_UPSTREAMS", ""))
+        private = self._endpoint_values(environment.get("RNS_PRIVATE_UPSTREAMS", ""))
+        public_bootstrap = set(
+            self._endpoint_values(environment.get("RNS_PUBLIC_BOOTSTRAP_UPSTREAMS", ""))
+        )
+        private_bootstrap = set(
+            self._endpoint_values(environment.get("RNS_PRIVATE_BOOTSTRAP_UPSTREAMS", ""))
+        )
+        try:
+            candidates = [self._safe_discovery_candidate(item) for item in collect_discovery(self.config_dir)]
+            collector: dict[str, Any] = {"available": True, "error": None}
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            candidates = []
+            collector = {"available": False, "error": str(error)}
+
+        counts = {"available": 0, "unknown": 0, "stale": 0}
+        for candidate in candidates:
+            status = candidate["status"]
+            if status in counts:
+                counts[status] += 1
+        autoconnected = traffic.get("autoconnected_interfaces", [])
+        if not isinstance(autoconnected, list):
+            autoconnected = []
+        bootstrap = {
+            "public": [
+                {"endpoint": endpoint, "bootstrap": endpoint in public_bootstrap}
+                for endpoint in public
+            ],
+            "private": [
+                {"endpoint": endpoint, "bootstrap": endpoint in private_bootstrap, "ifac": True}
+                for endpoint in private
+            ],
+        }
+        return {
+            "schema": 1,
+            "mode": mode if mode in {"off", "manual", "trusted_auto"} else "invalid",
+            "enabled": mode != "off",
+            "collector": collector,
+            "trusted_sources": sources,
+            "autoconnect": {
+                "enabled": mode == "trusted_auto",
+                "maximum": int(environment.get("RNS_DISCOVERY_MAX", "1") or 1),
+                "active": [item for item in autoconnected if isinstance(item, dict)],
+                "gravity": int(environment.get("RNS_DISCOVERY_GRAVITY", "0") or 0),
+            },
+            "bootstrap": bootstrap,
+            "safety": "Discovered interfaces are boundary-only; public announces never export to LoRa.",
+            "counts": {"total": len(candidates), **counts},
+            "candidates": candidates,
         }
 
     def _safe_discovery(self) -> list[dict[str, Any]]:
@@ -744,6 +848,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if self.command == "GET" and urlparse(self.path).path in {
             "/healthz",
             "/api/v1/status",
+            "/api/v1/discovery",
             "/api/v1/events",
         }:
             return
@@ -798,6 +903,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 self._json(200, _capabilities())
             elif path == "/api/v1/status":
                 self._json(200, self.state.status())
+            elif path == "/api/v1/discovery":
+                # A narrow endpoint for companion/operations tooling. It is
+                # derived from the same safe representation as /status and
+                # never contains an advertised config entry or IFAC key.
+                traffic = collect_rnstatus(self.state.config_dir)
+                self._json(200, self.state._discovery_status(traffic))
             elif path == "/api/v1/config":
                 self._json(200, {"schema": 1, "values": self.state.public_environment()})
             elif path == "/api/v1/config/schema":

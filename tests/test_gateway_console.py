@@ -66,6 +66,65 @@ def test_console_configuration_view_redacts_secrets(monkeypatch, tmp_path: Path)
     assert state.active_environment()["RNS_RADIO_IFAC_PASSPHRASE"] == "<configured>"
 
 
+def test_discovery_status_exposes_safe_catalogue_and_bootstrap_state(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("RNS_PUBLIC_DISCOVERY", "trusted_auto")
+    monkeypatch.setenv("RNS_DISCOVERY_SOURCES", "1" * 32)
+    monkeypatch.setenv("RNS_DISCOVERY_MAX", "3")
+    monkeypatch.setenv("RNS_PUBLIC_UPSTREAMS", "seed.example:4242")
+    monkeypatch.setenv("RNS_PUBLIC_BOOTSTRAP_UPSTREAMS", "seed.example:4242")
+    monkeypatch.setattr(
+        "rns_meshtastic.gateway_console.collect_discovery",
+        lambda _: [
+            {
+                "name": "Trusted Backbone",
+                "type": "BackboneInterface",
+                "status": "available",
+                "transport": True,
+                "network_id": "1" * 32,
+                "transport_id": "2" * 32,
+                "reachable_on": "rns.example",
+                "port": 4242,
+                "last_heard": 1.0,
+                "value": 18,
+                "hops": 1,
+                # These must never escape in a browser/API response.
+                "ifac_netkey": "remote-secret",
+                "config_entry": "passphrase = remote-secret",
+            }
+        ],
+    )
+    state = GatewayState(tmp_path, tmp_path / "lxmd", tmp_path / "stages")
+    discovery = state._discovery_status(
+        {
+            "autoconnected_interfaces": [
+                {"name": "Trusted Backbone", "source": "1" * 32, "up": True}
+            ]
+        }
+    )
+    assert discovery["mode"] == "trusted_auto"
+    assert discovery["autoconnect"]["maximum"] == 3
+    assert discovery["bootstrap"]["public"] == [{"endpoint": "seed.example:4242", "bootstrap": True}]
+    candidate = discovery["candidates"][0]
+    assert candidate["endpoint"] == "rns.example:4242"
+    assert candidate["network_id"] == "1" * 32
+    assert "remote-secret" not in str(discovery)
+    assert "config_entry" not in candidate
+    assert "ifac_netkey" not in candidate
+
+
+def test_discovery_status_reports_collector_failure_instead_of_empty_catalogue(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("RNS_PUBLIC_DISCOVERY", "manual")
+
+    def unavailable(_: Path):
+        raise RuntimeError("shared instance unavailable")
+
+    monkeypatch.setattr("rns_meshtastic.gateway_console.collect_discovery", unavailable)
+    state = GatewayState(tmp_path, tmp_path / "lxmd", tmp_path / "stages")
+    status = state._discovery_status({})
+    assert status["collector"] == {"available": False, "error": "shared instance unavailable"}
+    assert status["candidates"] == []
+
+
 def test_console_schema_covers_all_managed_fields_without_secret_values():
     value = config_schema()
     assert value["schema"] == 2

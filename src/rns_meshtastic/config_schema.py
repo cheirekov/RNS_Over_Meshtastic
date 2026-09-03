@@ -215,10 +215,10 @@ FIELDS = (
     _field(
         "RNS_PUBLIC_BOOTSTRAP_UPSTREAMS",
         "public",
-        "Subset of public upstream endpoints kept only while trusted discovery has not "
-        "connected a candidate.",
+        "Tick configured public boundary endpoints that are only temporary bootstrap seeds. "
+        "Reticulum closes them after the trusted auto-connect target is reached and restores "
+        "them when no discovered boundary remains.",
         kind="endpoint-list",
-        advanced=True,
         required="RNS_PUBLIC_DISCOVERY=trusted_auto",
         applies_when=(("RNS_PUBLIC_DISCOVERY", ("trusted_auto",)),),
     ),
@@ -231,9 +231,9 @@ FIELDS = (
     _field(
         "RNS_PRIVATE_BOOTSTRAP_UPSTREAMS",
         "public",
-        "Subset of private upstream endpoints used only as trusted discovery bootstrap connections.",
+        "Tick configured private IFAC boundary endpoints that are only temporary trusted-discovery "
+        "bootstrap seeds. They use the shared private-upstream IFAC profile.",
         kind="endpoint-list",
-        advanced=True,
         required="RNS_PUBLIC_DISCOVERY=trusted_auto",
         applies_when=(("RNS_PUBLIC_DISCOVERY", ("trusted_auto",)),),
     ),
@@ -263,26 +263,27 @@ FIELDS = (
     _field(
         "RNS_PUBLIC_DISCOVERY",
         "discovery",
-        "manual only lists candidates; trusted_auto is limited to trusted source identities.",
+        "off disables the catalogue; manual observes candidates but never connects; trusted_auto "
+        "connects only candidates announced by explicitly trusted source identities.",
         default="off",
         choices=("off", "manual", "trusted_auto"),
     ),
     _field(
         "RNS_DISCOVERY_SOURCES",
         "discovery",
-        "Comma-separated trusted 32-hex discovery source identity hashes.",
-        advanced=True,
+        "Comma-separated 32-hex identity hashes that are allowed to publish interface-discovery "
+        "records. These are not hostnames and are not ordinary RNS destination hashes.",
         applies_when=(("RNS_PUBLIC_DISCOVERY", ("manual", "trusted_auto")),),
     ),
     _field(
         "RNS_DISCOVERY_MAX",
         "discovery",
-        "Maximum trusted automatically connected interfaces.",
+        "Maximum concurrently trusted auto-connected boundary interfaces. This is a capacity limit, "
+        "not a latency or proximity benchmark.",
         default="1",
         kind="integer",
         minimum=1,
         maximum=8,
-        advanced=True,
         applies_when=(("RNS_PUBLIC_DISCOVERY", ("trusted_auto",)),),
     ),
     _field(

@@ -81,6 +81,7 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
     private_upstream_total = TrafficCounter()
     private_total = TrafficCounter()
     private_client_count = 0
+    autoconnected_interfaces: list[dict[str, Any]] = []
     for item in interfaces:
         short_name = str(item.get("short_name") or "")
         if short_name.startswith(PUBLIC_NAME_PREFIX):
@@ -95,6 +96,19 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
             private_total = private_total.add(_counter(item))
         elif item.get("parent_interface_name") == PRIVATE_TCP_NAME:
             private_client_count += 1
+        if item.get("autoconnect_source"):
+            # Keep this deliberately small. The Console must be able to explain
+            # which discovered boundary Reticulum actually opened, without
+            # accidentally publishing an interface configuration or IFAC data.
+            autoconnected_interfaces.append(
+                {
+                    "name": str(item.get("short_name") or item.get("name") or "discovered boundary"),
+                    "type": str(item.get("type") or "unknown"),
+                    "source": str(item.get("autoconnect_source")),
+                    "up": bool(item.get("status")),
+                    "gravity": item.get("gravity"),
+                }
+            )
 
     return {
         "schema": SCHEMA_VERSION,
@@ -110,6 +124,7 @@ def summarise_rnstatus(stats: Mapping[str, Any]) -> dict[str, Any]:
         "radio_parent_count": len(radio_parents),
         "radio_peer_count": len(radio_peers),
         "private_tcp_client_count": private_client_count,
+        "autoconnected_interfaces": autoconnected_interfaces,
     }
 
 
