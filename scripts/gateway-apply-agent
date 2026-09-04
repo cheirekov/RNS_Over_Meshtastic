@@ -146,7 +146,8 @@ install_agent() {
         printf '%s\n' '[Install]' 'WantedBy=default.target'
     } >"$unit_file"
     if ! systemctl --user daemon-reload || \
-        ! systemctl --user enable --now rns-meshtastic-gateway-apply.service; then
+        ! systemctl --user enable rns-meshtastic-gateway-apply.service || \
+        ! systemctl --user restart rns-meshtastic-gateway-apply.service; then
         echo "Could not start the apply agent; inspect with systemctl --user status -l" >&2
         exit 1
     fi
