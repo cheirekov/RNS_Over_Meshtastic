@@ -34,6 +34,11 @@ control() {
 }
 
 healthy() {
+    local running
+    running=$(compose ps --status running --services rnsd lxmd gateway-console 2>/dev/null) || return 1
+    for service in rnsd lxmd gateway-console; do
+        grep -Fxq "$service" <<<"$running" || return 1
+    done
     compose exec -T gateway-console python -c \
         'import os,urllib.request; p=os.environ.get("RNS_CONSOLE_PORT","8787"); urllib.request.urlopen("http://127.0.0.1:"+p+"/healthz",timeout=3).read()' \
         >/dev/null 2>&1
@@ -135,13 +140,16 @@ install_agent() {
         printf '%s\n' 'After=docker.service'
         printf '%s\n' '[Service]'
         printf '%s\n' 'Environment="PATH=/run/current-system/sw/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
-        printf 'WorkingDirectory="%s"\n' "$project_dir"
+        printf 'WorkingDirectory=%s\n' "$project_dir"
         printf 'ExecStart="%s" "%s" run\n' "$bash_bin" "$script_dir/gateway-apply-agent"
         printf '%s\n' 'Restart=always' 'RestartSec=5'
         printf '%s\n' '[Install]' 'WantedBy=default.target'
     } >"$unit_file"
-    systemctl --user daemon-reload
-    systemctl --user enable --now rns-meshtastic-gateway-apply.service
+    if ! systemctl --user daemon-reload || \
+        ! systemctl --user enable --now rns-meshtastic-gateway-apply.service; then
+        echo "Could not start the apply agent; inspect with systemctl --user status -l" >&2
+        exit 1
+    fi
     echo "Installed and started $unit_file"
     echo "The Console Apply & restart button will become available within 10 seconds."
 }

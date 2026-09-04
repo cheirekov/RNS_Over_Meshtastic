@@ -189,6 +189,11 @@ Apply status остава в UI след краткото прекъсване �
 rollback събитията се пазят в structured event journal. Backup-ът е mode `0600`
 и UI показва само неговото име, не host path.
 
+Agent health gate-ът изисква и трите managed containers да работят и проверява
+constant-time Console `/healthz`. Пълните `rnstatus`, discovery и route-table
+колектори не участват в liveness проверката, защото при хиляди маршрути могат
+нормално да отнемат повече от няколко секунди.
+
 Firewall/VPN и Basic authentication защитават достъпа на оператора, но не са
 причина web процесът да получи root-equivalent Docker socket. Host agent-ът е
 отделната privilege boundary: приема само stage име с фиксиран формат, работи

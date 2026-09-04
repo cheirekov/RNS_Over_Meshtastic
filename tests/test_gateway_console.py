@@ -295,7 +295,7 @@ def test_console_basic_auth_protects_ui_but_not_minimal_health():
     class State:
         @staticmethod
         def status():
-            return {"running": True}
+            raise AssertionError("minimal health must not run expensive collectors")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), ConsoleHandler)
     server.gateway_state = State()

@@ -1003,9 +1003,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         try:
             if path == "/healthz":
-                status = self.state.status()
-                response_status = 200 if status.get("running") else 503
-                self._json(response_status, {"status": "ok" if response_status == 200 else "unavailable"})
+                # Liveness must remain constant-time. The full status collector
+                # can legitimately take seconds on gateways with large route
+                # tables and is exposed separately at /api/v1/status.
+                self._json(200, {"status": "ok", "version": __version__})
             elif path == "/":
                 self._send(200, INDEX_HTML.encode(), "text/html; charset=utf-8")
             elif path == "/api/v1/capabilities":

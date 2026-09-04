@@ -1,4 +1,11 @@
-# Roadmap след 0.6.0
+# Roadmap след 0.6.1
+
+## Поправено в Linux Console 0.6.1
+
+- Constant-time `/healthz`, отделен от скъпите status/discovery/route collectors.
+- Apply gate проверява, че и трите managed containers работят, преди да приеме
+  Console liveness.
+- NixOS-compatible systemd `WorkingDirectory` и коректен installer failure exit.
 
 ## Завършено в Linux Console 0.6.0
 
